@@ -262,11 +262,15 @@ class RobinhoodRPC:
                 return out
         return None
 
+    _named_cap = __import__("re").compile(r"only (\d+) are allowed")
+
     @staticmethod
     def _too_big(e: Exception) -> bool:
         """The node refusing a range for its size, not for our rate: split it and ask again."""
         s = str(e).lower()
-        return "exceeds limit" in s or "timed out" in s or "too many" in s or "response size" in s
+        return ("exceeds limit" in s or "timed out" in s or "too many" in s
+                or "response size" in s or "narrow the block range" in s
+                or "are allowed for this request" in s)
 
     def logs(self, from_block: int, to_block: int, **flt) -> list:
         """`eth_getLogs` over a range, halving the range as often as the node demands.
@@ -274,6 +278,9 @@ class RobinhoodRPC:
         On 2026-09-10 the public node began capping an answer at 10,000 logs; on the 13th the
         roster's two 200k-block calls crossed it and every wallet's tracking failed - four
         hundred wallets, eight hundred requests, no fills, and the watcher starved behind them.
+        On 2026-09-30 it began refusing any range over 30,000 blocks outright ("narrow the
+        block range"), and says so instead of timing out; the named cap is parsed and used as
+        the step, so the roster stays two-plus requests even though a window is many chunks.
         A range the node will not answer whole is answered in halves, and the halves in halves;
         the depth is logarithmic, so a day of the roster costs a dozen calls, not a thousand.
         """
@@ -298,7 +305,11 @@ class RobinhoodRPC:
                     return got
             if from_block >= to_block or not self._too_big(e):
                 raise
-            self._max_span = max(1, min(self._max_span or span, span // 2))
+            # the node may name its cap outright ("only 30000 are allowed"): jump straight
+            # to it, but never wider than the halved span, so a refusal always shrinks.
+            m = self._named_cap.search(str(e))
+            cap = int(m.group(1)) if m else span
+            self._max_span = max(1, min(self._max_span or span, span // 2, cap))
             log.info("rpc: %d..%d too big for one answer (%s); %d blocks a call from here",
                      from_block, to_block, str(e)[:60], self._max_span)
             return self.logs(from_block, to_block, **flt)
