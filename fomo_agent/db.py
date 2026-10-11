@@ -348,7 +348,7 @@ MIGRATIONS: dict[int, str] = {
     """,
 }
 
-STATUSES = ("candidate", "tracking", "active", "watch", "dropped", "needs_review")
+STATUSES = ("candidate", "tracking", "active", "watch", "idle", "dropped", "needs_review")
 
 
 def now() -> int:

@@ -368,9 +368,27 @@ def import_results(conn: sqlite3.Connection, path: Path, model: str = "manual") 
     return stats
 
 
+def idle_when(ctx: dict) -> bool:
+    """A dropped verdict on a wallet that has never traded is not a judgment, it is the absence
+    of one. Three signs mean there is something to judge: fills on our own tape, a fomo book,
+    or an indexer cost basis (they paid for positions somewhere). A wallet with none of the
+    three is only socially present (followers). It is observed, not condemned — status `idle`
+    keeps it tracked, and its first trade (track.track_all) puts it back in the scoring queue.
+    """
+    if (ctx.get("last_30d") or {}).get("trades"):
+        return False
+    if ctx.get("open_positions"):
+        return False
+    st = ctx.get("indexer_stats") or {}
+    if st.get("open_cost"):
+        return False
+    return True
+
+
 def apply_score(conn: sqlite3.Connection, address: str, res: ScoreResult, model: str) -> None:
     """Write the verdict. A distributing wallet is watch at most whatever the model said: the
-    rule is the flow's, not the model's, and the summary carries the reason."""
+    rule is the flow's, not the model's, and the summary carries the reason. A dropped verdict
+    on a wallet that never traded becomes `idle`: observed, not judged."""
     status, summary, flags = res.status, res.summary, list(res.red_flags)
     from .analyze import flow_7d
     why = flow_7d(conn, address)["distributing"]
@@ -381,6 +399,11 @@ def apply_score(conn: sqlite3.Connection, address: str, res: ScoreResult, model:
             flags.append("distributing")
         if "distributing" not in (summary or ""):
             summary = f"{summary.rstrip('.')}. Held to watch: {why}." if summary else f"Held to watch: {why}."
+    if status == "dropped" and idle_when(build_context(conn, address)):
+        status = "idle"
+        summary = (f"{summary.rstrip('.')}. Observed, not judged: never traded on Robinhood "
+                   "Chain; idle wallets stay tracked and re-enter scoring at their first fill."
+                   if summary else "Idle: never traded on Robinhood Chain; observed, not judged.")
     with db.tx(conn):
         conn.execute(
             "UPDATE traders SET score=?, status=?, tags=?, ai_summary=?, ai_scored_at=?, ai_model=? WHERE address=?",

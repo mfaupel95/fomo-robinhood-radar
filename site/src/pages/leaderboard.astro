@@ -5,7 +5,7 @@ import Panel from '../components/Panel.astro';
 import Ident from '../components/Ident.astro';
 import { getLeaderboard, getStats, get, usd, verdictClass, verdictLabel } from '../lib/api';
 
-const valid = ['active', 'watch', 'dropped', 'all'];
+const valid = ['active', 'watch', 'idle', 'dropped', 'all'];
 const raw = Astro.url.searchParams.get('status') ?? 'active';
 const status = valid.includes(raw) ? raw : 'active';
 

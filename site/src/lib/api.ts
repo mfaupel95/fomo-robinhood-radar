@@ -3,7 +3,7 @@
 const BASE = import.meta.env.API_BASE ?? process.env.API_BASE ?? 'http://127.0.0.1:8000';
 
 export type Stats = {
-  traders: number; scored: number; active: number; watch: number; dropped: number;
+  traders: number; scored: number; active: number; watch: number; idle: number; dropped: number;
   fills: number; positions: number; open_pnl: number; tokens: number; updated_ts: number | null;
 };
 
@@ -261,7 +261,7 @@ export const stateLabel = (s: string, exit: number | null) =>
   s === 'trimmed' ? `trimmed ${pct(exit)}` : s === 'unknown' ? 'unsized' : s;
 
 export const verdictClass = (status: string) =>
-  status === 'active' ? 'follow' : status === 'watch' ? 'watch' : 'drop';
+  status === 'active' ? 'follow' : status === 'watch' ? 'watch' : status === 'idle' ? 'watch' : 'drop';
 
 export const verdictLabel = (status: string) =>
   status === 'active' ? 'follow' : status === 'dropped' ? 'drop' : status;

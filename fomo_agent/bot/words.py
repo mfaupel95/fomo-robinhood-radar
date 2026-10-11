@@ -425,7 +425,7 @@ def fmt_token(a: dict) -> str:
 
 
 def fmt_trader(a: dict) -> str:
-    mark = {"active": "◤", "watch": "◈", "dropped": "◣"}.get(a["status"], "·")
+    mark = {"active": "◤", "watch": "◈", "idle": "◷", "dropped": "◣"}.get(a["status"], "·")
     out = [f"{mark} <b>{esc(a['handle'] or short(a['address']))}</b> · "
            f"{a['score']} · {esc(a['status'])}"]
     if a["style"] or a["red_flags"]:
@@ -473,7 +473,7 @@ def fmt_trader(a: dict) -> str:
 def fmt_leaderboard(board: list[dict], status: str) -> str:
     if not board:
         return "Nothing scored yet."
-    label = {"active": "FOLLOW", "watch": "WATCH", "dropped": "DROPPED"}.get(status, status.upper())
+    label = {"active": "FOLLOW", "watch": "WATCH", "idle": "IDLE", "dropped": "DROPPED"}.get(status, status.upper())
     out = [f"<b>LEADERBOARD · {label}</b>",
            "<i>ranked by judgement, not by headline PnL</i>", ""]
     body = "\n".join(

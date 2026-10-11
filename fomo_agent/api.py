@@ -591,6 +591,7 @@ def stats(conn: sqlite3.Connection = Depends(get_conn)) -> dict:
         "scored": one("SELECT COUNT(*) FROM traders WHERE score IS NOT NULL"),
         "active": one("SELECT COUNT(*) FROM traders WHERE status=?", "active"),
         "watch": one("SELECT COUNT(*) FROM traders WHERE status=?", "watch"),
+        "idle": one("SELECT COUNT(*) FROM traders WHERE status=?", "idle"),
         "dropped": one("SELECT COUNT(*) FROM traders WHERE status=?", "dropped"),
         "fills": one(f"SELECT COUNT(*) FROM trades WHERE 1=1{not_quote}"),
         "positions": one("SELECT COUNT(*) FROM fomo_positions"),
@@ -753,7 +754,7 @@ def fresh(
 
 @app.get("/api/leaderboard", tags=["traders"])
 def leaderboard(
-    status: str = Query("active", pattern="^(active|watch|dropped|all)$"),
+    status: str = Query("active", pattern="^(active|watch|idle|dropped|all)$"),
     limit: int = Query(50, ge=1, le=400),
     conn: sqlite3.Connection = Depends(get_conn),
 ) -> dict:

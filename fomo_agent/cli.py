@@ -99,7 +99,7 @@ def chain_counts() -> dict[str, int]:
     conn = db.connect()
     try:
         return {r[0] or "solana": r[1] for r in conn.execute(
-            "SELECT chain, COUNT(*) FROM traders WHERE status IN ('candidate','tracking','active','watch') GROUP BY chain")}
+            "SELECT chain, COUNT(*) FROM traders WHERE status IN ('candidate','tracking','active','watch','idle') GROUP BY chain")}
     finally:
         conn.close()
 

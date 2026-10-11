@@ -38,6 +38,38 @@ def test_a_trenches_profile_without_fills_is_still_judgeable(tmp_path):
     assert out["exported"] == 1 and out["nothing_to_judge"] == 1
 
 
+def test_dropped_verdict_on_a_wallet_that_never_traded_becomes_idle(tmp_path):
+    """Followers alone are not evidence of trading, and a wallet that never traded on the chain
+    must not be condemned for it: the verdict lands `idle` — tracked, not judged — and stays out
+    of the queue until its first fill flips it back to `tracking`."""
+    from fomo_agent import db
+    from fomo_agent.models import ScoreResult
+    from fomo_agent.pipeline import score
+    conn = db.connect(tmp_path / "i.db")
+    w = "0x" + "ab" * 20
+    with db.tx(conn):
+        db.upsert_trader(conn, w, chain="robinhood", fomo_handle="influenzer", status="tracking",
+                         stats_json='{"fills":0,"net_pnl":0,"open_bags":0,"followers":121000}')
+    res = ScoreResult(score=5, status="dropped", style=[], red_flags=[],
+                      summary="Followers are not skill.", confidence=0.3)
+    score.apply_score(conn, w, res, "test")
+    row = db.get_trader(conn, w)
+    assert row["status"] == "idle" and row["score"] == 5
+    assert "Observed, not judged" in row["ai_summary"]
+    assert score.idle_when(score.build_context(conn, w)) is True
+    # out of the export queue until it trades
+    out = score.export_contexts(conn, tmp_path / "p.json", unscored_only=True)
+    assert out["exported"] == 0
+    # a wallet that actually paid for positions (indexer open_cost) is judged, not idled
+    w2 = "0x" + "cd" * 20
+    with db.tx(conn):
+        db.upsert_trader(conn, w2, chain="robinhood", fomo_handle="loser", status="tracking",
+                         stats_json='{"fills":0,"net_pnl":-6110,"open_bags":3,'
+                                    '"open_cost":6209,"open_value":99,"followers":20329}')
+    score.apply_score(conn, w2, res, "test")
+    assert db.get_trader(conn, w2)["status"] == "dropped"
+
+
 def test_a_distributing_wallet_is_watch_at_most_and_the_card_says_so(tmp_path, monkeypatch):
     """ArtofConviction: +$261k by fomo, $125k sold against $11k bought in the week. The model
     hears it in the context, the verdict is capped at watch, and the profile carries the reason."""

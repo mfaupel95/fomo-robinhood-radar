@@ -26,7 +26,10 @@ from ..config import settings
 from ..models import Trade
 
 log = logging.getLogger(__name__)
-TRACKED = ("candidate", "tracking", "active", "watch")
+# `idle` is a tracked wallet that has never traded on the chain yet: we watch it, we do not
+# judge it (see score.add_idle). It must stay in every pass so the moment it makes a first
+# trade it re-enters the scoring queue as `tracking` (track_all flips it).
+TRACKED = ("candidate", "tracking", "active", "watch", "idle")
 
 
 class Tracker(Protocol):
@@ -107,6 +110,11 @@ def track_wallet(conn: sqlite3.Connection, tracker: Tracker, address: str, chain
         row = db.get_trader(conn, address)
         if row and row["status"] == "candidate":
             db.set_status(conn, address, "tracking")
+        # an idle wallet only leaves its observation state by actually trading: the first fill
+        # puts it back in the scoring queue, where it earns a real verdict on real evidence
+        if inserted and row and row["status"] == "idle":
+            db.set_status(conn, address, "tracking")
+            log.info("idle wallet %s made its first trade -> tracking", address[:10])
     return inserted
 
 
