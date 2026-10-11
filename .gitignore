@@ -21,6 +21,16 @@ curl.txt
 *.db-wal
 *.db-shm
 
+# runtime/rss artifacts
+pending.json
+results.json
+
+# database backups
+*.bak-*
+
+# env template (keep keys patterns, not the file)
+.env.template
+
 # deploy key and any local server notes
 *.pem
 id_*
