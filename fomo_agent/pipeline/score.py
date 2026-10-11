@@ -318,9 +318,19 @@ def export_contexts(conn: sqlite3.Connection, path: Path, *, force: bool = False
     rows = pending_for_scoring(conn, force=force, limit=limit, unscored_only=unscored_only)
     rows, bots = drop_automated(conn, rows)
     contexts = [build_context(conn, r["address"]) for r in rows]
-    # a wallet with no fills on our tape and no open book is a name and a number from fomo -
-    # there is nothing to judge, and a verdict on nothing is worse than a queue
-    judged = [c for c in contexts if (c.get("last_30d") or {}).get("trades") or c.get("open_positions")]
+    # Three kinds of evidence make a wallet judgeable: fills on our own tape, an open book from
+    # fomo, or a third-party indexer profile with actual numbers in it. A trenches import can have
+    # zero fills on our chain and no fomo linkage yet still carry real values (followers, net PnL,
+    # open bags) — that is evidence, not "a name and a number from fomo". An empty or all-zero
+    # indexer payload is still nothing. Only a wallet with none of the three has nothing to judge,
+    # and a verdict on nothing is worse than a queue.
+    def indexer_has_evidence(stats: dict) -> bool:
+        numeric = [v for v in stats.values() if isinstance(v, (int, float))]
+        return bool(numeric and any(v for v in numeric)) or bool(stats.get("followers"))
+
+    judged = [c for c in contexts if (c.get("last_30d") or {}).get("trades")
+              or c.get("open_positions")
+              or (c.get("indexer_stats") and indexer_has_evidence(c["indexer_stats"]))]
     payload = {
         "instructions": EXPORT_INSTRUCTIONS,
         "schema": ScoreResult.model_json_schema(),

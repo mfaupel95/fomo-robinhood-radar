@@ -21,6 +21,23 @@ def test_received_tokens_are_marked_unearned_and_empty_wallets_are_not_exported(
     assert out["exported"] == 1 and out["nothing_to_judge"] == 1
 
 
+def test_a_trenches_profile_without_fills_is_still_judgeable(tmp_path):
+    """A trenches import can have zero fills on our tape and no fomo book yet carry real
+    indexer numbers (followers, net PnL, open bags). That is evidence, not nothing."""
+    from fomo_agent import db
+    from fomo_agent.pipeline import score
+    conn = db.connect(tmp_path / "t.db")
+    with db.tx(conn):
+        db.upsert_trader(conn, "0x" + "d1" * 20, chain="robinhood", fomo_handle="quiet",
+                         status="tracking",
+                         stats_json='{"fills":0,"net_pnl":-6110,"open_bags":3,'
+                                    '"open_cost":6209,"open_value":99,"followers":20329}')
+        db.upsert_trader(conn, "0x" + "d2" * 20, chain="robinhood", fomo_handle="bare",
+                         status="tracking", stats_json='{}')
+    out = score.export_contexts(conn, tmp_path / "p.json", unscored_only=True)
+    assert out["exported"] == 1 and out["nothing_to_judge"] == 1
+
+
 def test_a_distributing_wallet_is_watch_at_most_and_the_card_says_so(tmp_path, monkeypatch):
     """ArtofConviction: +$261k by fomo, $125k sold against $11k bought in the week. The model
     hears it in the context, the verdict is capped at watch, and the profile carries the reason."""
