@@ -185,12 +185,18 @@ class Settings:
     # never tell the same chat about the same token twice inside this window
     telegram_realert_hours: int = field(default_factory=lambda: _int("TELEGRAM_REALERT_HOURS", 12))
     # A burst: this much conviction from this many trusted wallets, all entering inside the
-    # window. 4.0 in 30 minutes is four wallets scoring 80 agreeing inside half an hour — the
-    # same bar the pushed signal uses, with a clock on it. From `cli hot --backtest` over 36
-    # days: about five a day, 39% reach 2x inside a day against 36% for the feed as it stands,
-    # and the feed as it stands fires fifty times a day. No age cap by default: nine in ten
-    # bursts are in a token's first hour, and the few that come in hours two to six did best.
-    hot_delta: float = field(default_factory=lambda: _float("HOT_DELTA", 4.0))
+    # window. 1.0 in 30 minutes is the whole trust line speaking — three wallets at 60 are
+    # (0.6)²×3 = 1.08 — with a clock on it: the same cohort the signal feed shows over a day,
+    # caught inside half an hour. Was 4.0 ("four 80s"), a bar that never fired on the live
+    # tape: YIELD (3 trusted first-buyers, conv 1.14) and LUCIA (5, 1.86/1.08 at the first
+    # crossing) — real launch bursts of one VIP cohort — both sat under it and bursts/pushes
+    # stayed empty. Replay on the local 20.5-day tape: delta 1.0 in 30 min from 3 wallets is
+    # ~0.9 bursts/day (19 bursts, 61% reached 2x inside a day, median best 2.9x) against 0 at
+    # any bar >= 2.0; the cluster checks (span >= 180 s, sells <= 50%, crews >= 2, liq >= $10k,
+    # cohort share 3-90%, namesake bar) still gate every push. TRUSTED stays 60: it is the
+    # trust line of every feed (signals, fresh, exits) and lowering it would count unipcs (45)
+    # and the other seed targets as trusted product-wide.
+    hot_delta: float = field(default_factory=lambda: _float("HOT_DELTA", 1.0))
     hot_window_min: int = field(default_factory=lambda: _int("HOT_WINDOW_MIN", 30))
     hot_min_wallets: int = field(default_factory=lambda: _int("HOT_MIN_WALLETS", 3))
     hot_max_age_h: int = field(default_factory=lambda: _int("HOT_MAX_AGE_H", 0))
