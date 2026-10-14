@@ -2,7 +2,7 @@
 # Keep the watchlist fresh while nobody is at the keyboard.
 # Tracking runs on the free Robinhood RPC, so a pass costs nothing from the Codex budget.
 set -u
-PY=.venv/Scripts/python
+PY="env -u PYTHONPATH .venv/Scripts/python"
 export PYTHONIOENCODING=utf-8
 passes=${1:-20}
 sleep_s=${2:-720}
