@@ -23,6 +23,22 @@ def test_the_same_fill_from_two_sources_lands_once(conn):
     assert conn.execute("SELECT COUNT(*) FROM trades").fetchone()[0] == 1
 
 
+def test_insert_trade_stamps_when_we_saw_it(conn):
+    """`inserted_at` is our own clock, distinct from the chain's `ts`: the gap between them is
+    the alert latency, and it must be set on insert so the watcher path is measurable."""
+    common = dict(address=WALLET, chain="robinhood", mint=MINT, side="buy", source="rpc")
+    tx1, tx2 = "0x" + "1" * 64, "0x" + "2" * 64
+    with db.tx(conn):
+        assert db.insert_trade(conn, sig=tx1, ts=db.now() - 60, **common)
+    row = conn.execute("SELECT ts, inserted_at FROM trades WHERE sig=?", (tx1,)).fetchone()
+    assert row["inserted_at"] is not None
+    assert row["inserted_at"] >= row["ts"]
+    # a caller may pass its own clock, but the default is now
+    assert db.insert_trade(conn, sig=tx2, ts=db.now() - 60, inserted_at=db.now() - 30, **common)
+    row2 = conn.execute("SELECT inserted_at FROM trades WHERE sig=?", (tx2,)).fetchone()
+    assert row2["inserted_at"] == db.now() - 30
+
+
 def test_different_fills_in_one_transaction_both_land(conn):
     common = dict(address=WALLET, chain="robinhood", ts=db.now(), source="rpc")
     with db.tx(conn):

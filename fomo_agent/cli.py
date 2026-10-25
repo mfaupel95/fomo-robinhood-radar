@@ -502,6 +502,39 @@ def watch_cmd(
         conn.close()
 
 
+@app.command("latency")
+def latency_cmd(
+    hours: int = typer.Option(24, "--hours", help="how far back to look"),
+    limit: int = typer.Option(20, "--limit", help="how many fills to show"),
+) -> None:
+    """How long between a trade on the chain and our pipeline writing it.
+
+    `trades.ts` is the chain's own time; `inserted_at` is when we wrote the row. The gap is the
+    alert latency, and it is the number that decides whether the watcher (seconds) or the
+    fifteen-minute pass is the production path. Fills without inserted_at predate the column.
+    """
+    conn = db.connect()
+    try:
+        rows = conn.execute(
+            "SELECT address, mint, side, usd_value, ts, inserted_at, source "
+            "FROM trades WHERE kind='trade' AND inserted_at IS NOT NULL "
+            "AND ts >= ? ORDER BY ts DESC LIMIT ?",
+            (db.now() - hours * 3600, limit),
+        ).fetchall()
+        if not rows:
+            typer.echo("no fills with inserted_at in the window (column is new)")
+            return
+        gaps = [r["inserted_at"] - r["ts"] for r in rows]
+        typer.echo(f"{'age_s':>7} {'lat_s':>7} {'side':>4} {'usd':>10} {'src':>8} {'mint':>10}")
+        for r, g in zip(rows, gaps):
+            typer.echo(f"{db.now() - r['ts']:>7} {g:>7} {r['side']:>4} {r['usd_value'] or 0:>10,.0f} "
+                       f"{r['source']:>8} {r['mint'][:10]}")
+        typer.echo(f"\nmedian latency: {sorted(gaps)[len(gaps)//2]}s  "
+                   f"min {min(gaps)}s  max {max(gaps)}s  (n={len(gaps)})")
+    finally:
+        conn.close()
+
+
 @app.command("hands")
 def hands_cmd(
     post: bool = typer.Option(False, "--post", help="post the wide one to X"),

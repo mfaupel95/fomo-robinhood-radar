@@ -346,6 +346,13 @@ MIGRATIONS: dict[int, str] = {
     ALTER TABLE api_keys ADD COLUMN paid_until INTEGER;
     ALTER TABLE api_keys ADD COLUMN label TEXT;
     """,
+    32: """
+    -- when did WE see the trade: the chain's own time is `trades.ts`, the moment our pipeline
+    -- wrote the row is inserted_at, and the difference is the alert latency (watch.py reads the
+    -- chain every few seconds; the fifteen-minute pass must never be the faster path)
+    ALTER TABLE trades ADD COLUMN inserted_at INTEGER;
+    CREATE INDEX IF NOT EXISTS idx_trades_inserted ON trades(inserted_at);
+    """,
 }
 
 STATUSES = ("candidate", "tracking", "active", "watch", "idle", "dropped", "needs_review")
@@ -490,7 +497,7 @@ def holdings_for(conn: sqlite3.Connection, address: str) -> dict[str, tuple[floa
 # ---------- trades ----------
 
 TRADE_COLS = ("sig", "address", "chain", "mint", "side", "sol_amount", "token_amount", "usd_value",
-              "ts", "source", "fill_key", "kind")
+              "ts", "source", "fill_key", "kind", "inserted_at")
 
 
 def fill_key(t: dict[str, Any]) -> str:
@@ -514,6 +521,7 @@ def insert_trade(conn: sqlite3.Connection, **t: Any) -> bool:
     is never replaced by another's opinion of it.
     """
     t = {**t, "fill_key": t.get("fill_key") or fill_key(t)}
+    t.setdefault("inserted_at", now())
     vals = [t.get(c) for c in TRADE_COLS]
     cur = conn.execute(
         f"INSERT OR IGNORE INTO trades({','.join(TRADE_COLS)}) VALUES({_placeholders(len(TRADE_COLS))})", vals
