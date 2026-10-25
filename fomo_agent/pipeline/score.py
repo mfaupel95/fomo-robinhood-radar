@@ -24,14 +24,18 @@ third-party indexer's stats. Respond with ONLY a JSON object matching exactly th
  "summary": "<2-3 sentences>", "confidence": <float 0-1>}
 
 How to weigh the evidence:
-- fomo PnL (pnl_30d / pnl_7d / pnl_24h) is the primary signal. It is profit in USD **including open
-  positions**, which is where memecoin results actually sit: a 5k entry that runs 500x is millions on
-  paper and nothing realized. Do not discount it for being unrealized.
+- `indexer_stats.realized_pnl` is the primary signal: profit actually banked, with its own
+  `closed_trades` and `win_rate`. A wallet is judged on what it has taken, not on paper marks.
+- fomo PnL (pnl_30d / pnl_7d / pnl_24h) is secondary and includes open positions — a number on
+  paper. Unrealized gains are not a record: count them only as context behind realized results.
 - On-chain flow (usd_bought vs usd_sold) is the sanity check, not the verdict. A trader who is
   accumulating shows negative flow while being deeply profitable; that is normal, not a red flag.
-- `open_positions` is the book behind that number: what they hold, what it cost, and the multiple.
-  A large PnL resting on one position is thinner evidence than the same PnL across several, and a
-  high multiple on a real cost basis is the clearest proof of an early entry there is.
+- `open_positions` is the book behind the paper number: what they hold, what it cost, and the
+  multiple. A large PnL resting on one position is thinner evidence than the same PnL across
+  several — and if the realized figure is near zero, the whole fomo PnL is one open bet, not skill.
+- `quiet_days` is how long the wallet has been silent. A wallet quiet this long has stopped
+  signalling: unless it carries a real realized record, silence means the verdict is stale —
+  drop it. A wallet that never traded at all is not judged (handled as `idle` separately).
 - Trade counts, unique tokens, hold times and early entries describe the *style*.
 - Genuine red flags: minute-scale holds with uniform sizes (bot), round-tripping with no result
   (wash), a single position explaining everything (one-hit).
@@ -39,9 +43,9 @@ How to weigh the evidence:
   at size: it is handing out what it holds, whatever the PnL figure says. Status is "watch" at
   most for such a wallet, and the summary should say what it is selling down.
 
-Guidance: score>=70 -> active (large PnL with a repeatable pattern behind it);
-40-69 -> watch (promising, thin evidence, or profit that rests on one unresolved position);
-<40 -> dropped (no PnL and no edge, bot-like, or wash).
+Guidance: score>=70 -> active (realized profit across a repeatable pattern);
+40-69 -> watch (promising, thin realized record, or profit resting on one unresolved position);
+<40 -> dropped (no realized profit and no edge, bot-like, wash, or quiet too long).
 Few trades = low confidence."""
 
 # rough public list prices, USD per 1M tokens (input, output); used only for cost logging
@@ -67,6 +71,12 @@ def build_context(conn: sqlite3.Connection, address: str) -> dict[str, Any]:
             ctx["indexer_stats"] = {"source": t["stats_source"], **json.loads(t["stats_json"])}
         except (TypeError, ValueError):
             pass
+    # how long this wallet has been quiet: days since its last real trade. Part of the
+    # context so the weighting (realized-first) can treat stale wallets as stale
+    last_trade = conn.execute(
+        "SELECT MAX(ts) FROM trades WHERE address=? AND COALESCE(kind,'trade')='trade'", (address,)
+    ).fetchone()[0]
+    ctx["quiet_days"] = round((now - last_trade) / 86400, 1) if last_trade else None
     for days in (7, 30):
         # only what the wallet did itself, at size: a swap delivered by an outside key or a
         # dust push is somebody else's action and must not colour the verdict either way
@@ -191,15 +201,19 @@ EXPORT_INSTRUCTIONS = (
     '"style": ["sniper"|"swing"|"scalper"|"holder"|"copy-follower"], '
     '"red_flags": ["bot"|"bundler"|"insider-like"|"wash"|"one-hit"], '
     '"summary": "2-3 sentences", "confidence": 0-1}. '
-    "Weigh fomo PnL first: it is USD profit INCLUDING open positions, which is where memecoin results sit. "
-    "On-chain buy/sell flow is only a sanity check — an accumulating trader shows negative flow while being "
-    "profitable. `open_positions` shows the book behind the number: several winners beat one, and a high "
+    "Weigh `indexer_stats.realized_pnl` first: profit actually banked is the record, with the wallet's own "
+    "`win_rate` and `closed_trades`. fomo PnL (pnl_30d/7d/24h) is secondary - it INCLUDES open positions, so "
+    "unrealized paper gains are not skill; near-zero realized with a big fomo figure is one open bet. On-chain "
+    "buy/sell flow is only a sanity check - an accumulating trader shows negative flow while being "
+    "profitable. `open_positions` shows the book behind the paper number: several winners beat one, and a high "
     "multiple on a real cost basis is the clearest evidence of an early entry. A position marked `unearned` "
     "(profit with no cost basis) was received, not bought - an airdrop, a transfer, a dev allocation: count none of "
     "its PnL as skill, and flag `insider-like` when it is most of the number; `unearned_pnl` sums them. "
-    "Rules: score>=70 -> active (large PnL with a repeatable pattern); 40-69 -> watch (promising, "
-    "thin, or resting on one unresolved position); <40 -> dropped (no PnL and no edge, bot-like, wash). "
-    "Few trades = low confidence."
+    "`quiet_days` is how long the wallet has been silent: a wallet quiet too long has stopped signalling and "
+    "is dropped unless it carries a real realized record. "
+    "Rules: score>=70 -> active (realized profit across a repeatable pattern); 40-69 -> watch (promising, "
+    "thin realized record, or resting on one unresolved position); <40 -> dropped (no realized profit and no "
+    "edge, bot-like, wash, or quiet too long). Few trades = low confidence."
 )
 
 
@@ -230,8 +244,8 @@ def digest_lines(payload: dict) -> list[str]:
 
     # Traders we imported from an indexer carry its realized PnL; ones we resolved ourselves have
     # only our own on-chain history, so rank on what every row actually has.
-    # fomo's own PnL leads: it includes open positions, and in memecoins that is where the result is.
-    # On-chain flow stays as the sanity check underneath it.
+    # Realized/banked profit leads (it is the record); fomo's own PnL, which includes open
+    # positions, stays as the tiebreak and as context underneath it.
     def best_multiple(w):
         """The strongest open position, which is what a large fomo figure usually rests on."""
         ms = [p.get("multiple") for p in (w.get("open_positions") or []) if p.get("multiple")]
@@ -241,7 +255,8 @@ def digest_lines(payload: dict) -> list[str]:
         ps = w.get("open_positions") or []
         return ps[0]["symbol"] if ps and ps[0].get("symbol") else "-"
 
-    wallets = sorted(payload["wallets"], key=lambda w: -(fomo_pnl(w) or net30(w)))
+    wallets = sorted(payload["wallets"],
+                     key=lambda w: -((w.get("indexer_stats") or {}).get("realized_pnl") or fomo_pnl(w) or net30(w)))
     out = [f"{'#':>4} {'handle':<18}{'fomoPnL':>12}{'realized':>11}{'30d':>5}{'buy':>5}{'sel':>5}{'tok':>5}"
            f"{'usdBuy':>11}{'usdSell':>11}{'net':>11}{'hold':>7}{'e10m':>5}{'7d':>5}"
            f"{'win%':>6}{'bags':>5}{'bestX':>7} {'topBag':<10} address"]
@@ -310,6 +325,17 @@ def pending_for_scoring(conn: sqlite3.Connection, *, force: bool = False, limit:
         return [r for r in rows if r["score"] is None][:limit] if limit else [
             r for r in rows if r["score"] is None]
     rows = [r for r in rows if force or needs_rescore(r)]
+    # Stale wallets are due regardless of their rescore window: a wallet whose last real trade
+    # is older than `zombie_days` gets a fresh verdict no matter how recently it was scored,
+    # so silence alone forces the realized-first model to look again (and usually drop it).
+    if not force and not unscored_only and settings.zombie_days > 0:
+        cutoff = db.now() - settings.zombie_days * 86400
+        stale = {r[0] for r in conn.execute(
+            "SELECT address FROM trades WHERE COALESCE(kind,'trade')='trade' "
+            "GROUP BY address HAVING MAX(ts) < ?", (cutoff,))}
+        known = {r["address"] for r in rows}
+        rows += [r for r in db.traders_by_status(conn, "active", "watch")
+                 if r["address"] in stale and r["address"] not in known]
     return rows[:limit] if limit else rows
 
 

@@ -1,5 +1,8 @@
 
 
+import json
+
+
 def test_received_tokens_are_marked_unearned_and_empty_wallets_are_not_exported(tmp_path):
     from fomo_agent import db
     from fomo_agent.pipeline import score
@@ -68,6 +71,57 @@ def test_dropped_verdict_on_a_wallet_that_never_traded_becomes_idle(tmp_path):
                                     '"open_cost":6209,"open_value":99,"followers":20329}')
     score.apply_score(conn, w2, res, "test")
     assert db.get_trader(conn, w2)["status"] == "dropped"
+
+
+def test_a_stale_wallet_is_due_for_scoring_regardless_of_its_window(tmp_path, monkeypatch):
+    """A wallet whose last real trade is older than `zombie_days` is put back through scoring
+    even when its usual rescore window has not elapsed: silence alone forces a fresh verdict.
+    The context also carries quiet_days so the realized-first model can act on it."""
+    from fomo_agent import db
+    from fomo_agent.config import settings
+    from fomo_agent.pipeline import score
+    monkeypatch.setattr(settings, "zombie_days", 21)
+    conn = db.connect(tmp_path / "z.db")
+    w, mint, now = "0x" + "42" * 20, "0x" + "99" * 20, db.now()
+    with db.tx(conn):
+        db.upsert_trader(conn, w, chain="robinhood", fomo_handle="silent", status="watch",
+                         stats_json='{"realized_pnl": -500, "win_rate": 0.2}')
+        db.upsert_token(conn, mint, chain="robinhood", symbol="OLD")
+        # scored yesterday (watch window is 72h, so not due by window)...
+        conn.execute("UPDATE traders SET ai_scored_at=? WHERE address=?", (now - 86400, w))
+        # ...but its last real trade is 30 days old
+        for i in range(3):
+            db.insert_trade(conn, sig=f"z{i}", address=w, chain="robinhood", mint=mint,
+                            side="buy", usd_value=100.0, ts=now - 30 * 86400, source="rpc")
+    ctx = score.build_context(conn, w)
+    assert ctx["quiet_days"] and ctx["quiet_days"] >= 29.0
+    due = score.pending_for_scoring(conn)
+    assert any(r["address"] == w for r in due)
+    assert "realized" in score.EXPORT_INSTRUCTIONS and "quiet_days" in score.EXPORT_INSTRUCTIONS
+    out = score.export_contexts(conn, tmp_path / "p.json")
+    assert out["exported"] >= 1
+    payload = json.loads((tmp_path / "p.json").read_text(encoding="utf-8"))
+    ctx_w = [c for c in payload["wallets"] if c["address"] == w][0]
+    assert ctx_w["quiet_days"] and ctx_w["quiet_days"] >= 29.0
+
+
+def test_stale_rule_respects_zero_zombie_days(tmp_path, monkeypatch):
+    """ZOMBIE_DAYS=0 disables the stale-wallet override entirely: only the normal rescore
+    windows decide who is due, so an operator can turn the new rule off without touching code."""
+    from fomo_agent import db
+    from fomo_agent.config import settings
+    from fomo_agent.pipeline import score
+    monkeypatch.setattr(settings, "zombie_days", 0)
+    conn = db.connect(tmp_path / "z0.db")
+    w, mint, now = "0x" + "42" * 20, "0x" + "99" * 20, db.now()
+    with db.tx(conn):
+        db.upsert_trader(conn, w, chain="robinhood", fomo_handle="silent", status="watch")
+        db.upsert_token(conn, mint, chain="robinhood", symbol="OLD")
+        conn.execute("UPDATE traders SET ai_scored_at=? WHERE address=?", (now - 86400, w))
+        db.insert_trade(conn, sig="z0", address=w, chain="robinhood", mint=mint,
+                        side="buy", usd_value=100.0, ts=now - 30 * 86400, source="rpc")
+    due = score.pending_for_scoring(conn)
+    assert not any(r["address"] == w for r in due)
 
 
 def test_a_distributing_wallet_is_watch_at_most_and_the_card_says_so(tmp_path, monkeypatch):

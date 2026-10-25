@@ -466,6 +466,10 @@ class Settings:
     rescore_after_hours: dict[str, float] = field(
         default_factory=lambda: {"active": 24, "watch": 72, "dropped": 14 * 24, "tracking": 0, "candidate": 0}
     )
+    # a wallet that has not traded for this many days is stale: it is put back through scoring
+    # (the context shows quiet_days, and the realized-first weighting tends to drop it)
+    # regardless of its usual rescore window
+    zombie_days: int = field(default_factory=lambda: _int("ZOMBIE_DAYS", 21))
     deep_top_n: int = 20
     # "api"    - call the Anthropic API (needs ANTHROPIC_API_KEY)
     # "manual" - export contexts to a file, score them inside a Claude chat, import back
