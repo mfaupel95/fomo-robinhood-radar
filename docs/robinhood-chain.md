@@ -37,8 +37,16 @@ sender finds nothing; searching Transfer logs by topic finds everything.
 Every fill routes through one contract:
 
 ```
-router  0xb92fe925dc43a0ecde6c8b1a2709c170ec4fff4f     (RPC_ROUTERS)
+router  0x0729e2a4716d9f7dd17858d5d504426d228697f7     (RPC_ROUTERS, live since 2026-10-30)
+router  0xb92fe925dc43a0ecde6c8b1a2709c170ec4fff4f     (retired, kept as a second entry)
 ```
+
+The 2026-10-30 measurement that replaced the old one: across 147 tracked wallets and 24h of
+Transfer logs, the old contract faced **0** legs while `0x0729e2a4…` carried **166** legs
+(88 buys / 78 sells, 67 distinct tokens, 45 wallets). A tracker pass with it configured then
+wrote the first two fills since 2026-10-26. Re-derive it the same way if the tape goes quiet
+again: tally the counterparty of every wallet Transfer leg, and the address that appears on
+both sides across many tokens is the router.
 
 - token moves **router → wallet** = a buy
 - token moves **wallet → router** = a sell

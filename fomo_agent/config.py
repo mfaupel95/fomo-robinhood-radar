@@ -88,9 +88,13 @@ class Settings:
         "Chrome/131.0.0.0 Safari/537.36"))
     rpc_max_per_min: int = field(default_factory=lambda: _int("RPC_MAX_PER_MIN", 45))
     rpc_batch_size: int = field(default_factory=lambda: _int("RPC_BATCH_SIZE", 40))
-    # every fomo fill is routed through this contract; a wallet leg without it is not a trade
+    # every fomo fill routes through a router contract; the first entry is the live one, and a
+    # retired router can stay listed harmlessly. The default tracks what .env ships, so a fresh
+    # clone with no RPC_ROUTERS still sees fills.
     rpc_routers: tuple[str, ...] = field(default_factory=lambda: tuple(
-        r.strip() for r in _env("RPC_ROUTERS", "0xb92fe925dc43a0ecde6c8b1a2709c170ec4fff4f").split(",") if r.strip()))
+        r.strip() for r in _env("RPC_ROUTERS",
+                                "0x0729e2a4716d9f7dd17858d5d504426d228697f7,"
+                                "0xb92fe925dc43a0ecde6c8b1a2709c170ec4fff4f").split(",") if r.strip()))
     rpc_window_blocks: int = field(default_factory=lambda: _int("RPC_WINDOW_BLOCKS", 200_000))
     # the DEX's singleton that holds every pool and emits every swap (Uniswap v4 shape): a pool is
     # a 32-byte id in its logs, not an address, and its swaps are found by that id
