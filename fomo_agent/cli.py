@@ -882,7 +882,10 @@ def run(once: bool = typer.Option(False, "--once", help="single pass of every st
         ("crews", 6 * 3600, lambda c: __import__("fomo_agent.pipeline.crews", fromlist=["compute"]).compute(c)),
         ("report", settings.report_interval, do_report),
     ]
-    last: dict[str, float] = {k: 0.0 for k, _, _ in steps}
+    # -inf rather than 0: monotonic() counts from boot, so on a machine up for less than an
+    # interval - a fresh CI runner, a just-rebooted box - zero means every long step (track,
+    # holdings, report) is silently skipped and `--once` passes without doing its work
+    last: dict[str, float] = {k: float("-inf") for k, _, _ in steps}
     while True:
         now = time.monotonic()
         for kind, interval, fn in steps:
