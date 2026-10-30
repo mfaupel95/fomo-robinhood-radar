@@ -46,13 +46,15 @@ def _claude_oauth_token() -> str:
     try:
         d = _json.loads(p.read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        return ""
+        d = {}
     oauth = d.get("claudeAiOauth") or {}
     tok = (oauth.get("accessToken") or "").strip()
     exp = oauth.get("expiresAt")
-    if tok and isinstance(exp, (int, float)) and exp / 1000 <= _time.time() + 30:
-        return ""
-    return tok
+    if tok and isinstance(exp, (int, float)) and exp / 1000 > _time.time() + 30:
+        return tok
+    # Zweite Quelle: ein in .env hinterlegter OAuth-Token (ANTHROPIC_TOKEN). Auch er
+    # ist ein Bearer-Token, kein API-Key - als x-api-key gibt er 401.
+    return _env("ANTHROPIC_TOKEN")
 
 
 @dataclass
