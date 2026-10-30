@@ -110,6 +110,6 @@ class ScoreResult(BaseModel):
     score: int = Field(ge=0, le=100)
     status: Literal["active", "watch", "dropped"]
     style: list[Literal["sniper", "swing", "scalper", "holder", "copy-follower"]] = []
-    red_flags: list[Literal["bot", "bundler", "insider-like", "wash", "one-hit"]] = []
+    red_flags: list[Literal["bot", "bundler", "insider-like", "wash", "one-hit", "distributing"]] = []
     summary: str
     confidence: float = Field(ge=0, le=1)

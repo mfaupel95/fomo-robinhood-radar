@@ -30,11 +30,40 @@ def _float(name: str, default: float) -> float:
     return float(v) if v else default
 
 
+def _claude_oauth_token() -> str:
+    """Liest den Claude-Code-OAuth-Token aus ~/.claude/.credentials.json.
+
+    Warum nicht aus .env: der Token laeuft nach wenigen Stunden ab, Claude Code
+    erneuert aber die Datei. Ein kopierter Wert waere schnell tot. Ist der
+    gespeicherte Token schon abgelaufen, wird NICHT refreshed (das macht Claude
+    Code selbst) - dann gibt es keinen Token und der Scorer faellt auf manual.
+    """
+    import json as _json
+    import time as _time
+    from pathlib import Path as _Path
+
+    p = _Path.home() / ".claude" / ".credentials.json"
+    try:
+        d = _json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return ""
+    oauth = d.get("claudeAiOauth") or {}
+    tok = (oauth.get("accessToken") or "").strip()
+    exp = oauth.get("expiresAt")
+    if tok and isinstance(exp, (int, float)) and exp / 1000 <= _time.time() + 30:
+        return ""
+    return tok
+
+
 @dataclass
 class Settings:
     # keys
     helius_api_key: str = field(default_factory=lambda: _env("HELIUS_API_KEY"))
     anthropic_api_key: str = field(default_factory=lambda: _env("ANTHROPIC_API_KEY"))
+    # Claude-Code-OAuth (Abo) statt API-Key: derselbe Token, der als x-api-key 401 gibt,
+    # funktioniert als Bearer. Wird bei jedem Laden frisch gelesen, weil Claude Code die
+    # Datei selbst erneuert - ein in .env kopierter Token waere nach ~5h tot.
+    anthropic_auth_token: str = field(default_factory=lambda: _claude_oauth_token())
     codex_api_key: str = field(default_factory=lambda: _env("CODEX_API_KEY"))
     fomo_session: str = field(default_factory=lambda: _env("FOMO_SESSION"))
     # fomoapi.io: the fomo half over plain HTTP, with no browser and no account of ours to lose.
@@ -493,7 +522,7 @@ class Settings:
         """Resolved scoring backend: 'api' or 'manual'."""
         if self.scorer_mode in ("api", "manual"):
             return self.scorer_mode
-        return "api" if self.anthropic_api_key else "manual"
+        return "api" if (self.anthropic_api_key or self.anthropic_auth_token) else "manual"
 
     # optional
     telegram_bot_token: str = field(default_factory=lambda: _env("TELEGRAM_BOT_TOKEN"))

@@ -20,7 +20,7 @@ You receive, for ONE trader: fomo.family's own PnL figures, on-chain trade aggre
 third-party indexer's stats. Respond with ONLY a JSON object matching exactly this schema, no prose:
 {"score": <int 0-100>, "status": "active"|"watch"|"dropped",
  "style": [subset of "sniper","swing","scalper","holder","copy-follower"],
- "red_flags": [subset of "bot","bundler","insider-like","wash","one-hit"],
+ "red_flags": [subset of "bot","bundler","insider-like","wash","one-hit","distributing"],
  "summary": "<2-3 sentences>", "confidence": <float 0-1>}
 
 How to weigh the evidence:
@@ -160,7 +160,15 @@ def build_context(conn: sqlite3.Connection, address: str) -> dict[str, Any]:
 def call_claude(ctx: dict, model: str) -> tuple[ScoreResult, float]:
     import anthropic
 
-    client = anthropic.Anthropic(api_key=settings.anthropic_api_key or None)
+    # Zwei Wege: klassischer API-Key (x-api-key) oder Claude-Code-OAuth als Bearer.
+    # Der OAuth-Weg ist noetig, weil das Abo keinen API-Key liefert; derselbe Token
+    # wird als x-api-key mit 401 abgelehnt, als Bearer aber akzeptiert.
+    if settings.anthropic_api_key:
+        client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+    elif settings.anthropic_auth_token:
+        client = anthropic.Anthropic(auth_token=settings.anthropic_auth_token)
+    else:
+        raise RuntimeError("kein Anthropic-Zugang: ANTHROPIC_API_KEY leer und kein Claude-OAuth-Token")
     user = json.dumps(ctx, separators=(",", ":"))[:2048]
     last_err: Exception | None = None
     cost = 0.0
@@ -199,7 +207,7 @@ EXPORT_INSTRUCTIONS = (
     "Score each wallet in `wallets`. Reply with a JSON array only, one object per wallet: "
     '{"address": "<address>", "score": 0-100, "status": "active|watch|dropped", '
     '"style": ["sniper"|"swing"|"scalper"|"holder"|"copy-follower"], '
-    '"red_flags": ["bot"|"bundler"|"insider-like"|"wash"|"one-hit"], '
+    '"red_flags": ["bot"|"bundler"|"insider-like"|"wash"|"one-hit"|"distributing"], '
     '"summary": "2-3 sentences", "confidence": 0-1}. '
     "Weigh `indexer_stats.realized_pnl` first: profit actually banked is the record, with the wallet's own "
     "`win_rate` and `closed_trades`. fomo PnL (pnl_30d/7d/24h) is secondary - it INCLUDES open positions, so "
