@@ -5,9 +5,15 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from dotenv import load_dotenv
+from dotenv import load_dotenv, find_dotenv
 
-load_dotenv()
+# config.py liegt in <repo>/fomo_agent/ -> die .env liegt zwei Ebenen hoeher im Repo-Root.
+# Explizit anbinden, damit der Prozess die Keys findet, egal aus welchem cwd er startet.
+_ENV_PATH = Path(__file__).resolve().parents[1] / ".env"
+if _ENV_PATH.exists():
+    load_dotenv(_ENV_PATH, override=True)
+else:
+    load_dotenv(find_dotenv(usecwd=True), override=True)
 
 
 def _env(name: str, default: str = "") -> str:

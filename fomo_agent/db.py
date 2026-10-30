@@ -353,6 +353,12 @@ MIGRATIONS: dict[int, str] = {
     ALTER TABLE trades ADD COLUMN inserted_at INTEGER;
     CREATE INDEX IF NOT EXISTS idx_trades_inserted ON trades(inserted_at);
     """,
+    33: """
+    -- which process wrote the fill: the watcher (seconds) or the track pass (minutes). Both write
+    -- source='rpc', so without this the fast path is indistinguishable from the slow one and the
+    -- latency report cannot say whether the watcher is actually the production path.
+    ALTER TABLE trades ADD COLUMN writer TEXT;
+    """,
 }
 
 STATUSES = ("candidate", "tracking", "active", "watch", "idle", "dropped", "needs_review")
