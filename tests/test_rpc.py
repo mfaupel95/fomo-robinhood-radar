@@ -427,3 +427,34 @@ def test_a_pools_volume_is_read_from_its_own_swaps(monkeypatch):
     # a pool whose currencies are neither ether nor a quote asset has no dollar volume to read
     rpc._pools["0x" + "c4" * 32] = ("0x" + "a" * 40, "0x" + "b" * 40)
     assert rpc.pool_volume_usd("0x" + "c4" * 32, since_ts=1_700_099_800) is None
+
+
+def test_an_empty_scan_is_cached_like_any_other(monkeypatch):
+    """A quiet chain is a valid answer, not a cache miss.
+
+    With `if self._fills:` an empty result read as "not loaded yet", so every wallet in the pass
+    re-scanned the whole window: 25 full scans instead of one, the more requests the fewer fills.
+    """
+    queries = []
+
+    def fake_post(self, payload):
+        if isinstance(payload, list):
+            return [{"id": c["id"], "result": "0x" + "0" * 64} for c in payload]
+        method = payload["method"]
+        if method == "eth_blockNumber":
+            return {"result": hex(1_000_000)}
+        if method == "eth_getBlockByNumber":
+            return {"result": {"timestamp": hex(1_700_000_000)}}
+        if method == "eth_getLogs":
+            queries.append(payload["params"][0])
+            return {"result": []}
+        raise AssertionError(f"unexpected call {method}")
+
+    monkeypatch.setattr(RobinhoodRPC, "_post", fake_post)
+    monkeypatch.setattr(settings, "rpc_min_interval_s", 600.0)
+    rpc = RobinhoodRPC(url="http://offline")
+    wallets = ["0x" + "a1" * 20, "0x" + "a2" * 20, "0x" + "a3" * 20]
+    rpc.prime(wallets)
+
+    assert all(rpc.get_trades(w) == [] for w in wallets)
+    assert len(queries) == 2, f"one scan (incoming + outgoing), got {len(queries)} log queries"

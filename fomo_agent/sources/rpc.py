@@ -631,7 +631,10 @@ class RobinhoodRPC:
                 # the scan for this pass already failed: every wallet asked after it gets the
                 # same answer without another two requests each
                 raise RpcError(f"scan failed earlier this pass: {self._failed}")
-            if self._fills:
+            # `_fills is not None` and not `if self._fills`: an empty scan (a quiet chain, nobody
+            # traded) is a valid answer and must be cached like any other, or every wallet in the
+            # pass re-scans the whole window — 25 full scans instead of one.
+            if self._fills is not None:
                 return
 
         head = self.block_number()
