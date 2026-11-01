@@ -10,10 +10,19 @@ from dotenv import load_dotenv, find_dotenv
 # config.py liegt in <repo>/fomo_agent/ -> die .env liegt zwei Ebenen hoeher im Repo-Root.
 # Explizit anbinden, damit der Prozess die Keys findet, egal aus welchem cwd er startet.
 _ENV_PATH = Path(__file__).resolve().parents[1] / ".env"
+# Was VOR dem Laden in der Umgebung stand, wird gebraucht: eine LEERE Zeile in
+# der .env (z. B. "FOMOAPI_KEY=") darf einen echten Umgebungswert nicht
+# loeschen. override=True laesst die .env gewinnen - richtig fuer Werte, die
+# dort stehen, falsch fuer leere Platzhalter. Max legt FOMOAPI_KEY in die
+# Windows-Umgebungsvariablen; ohne diese Rettung kaeme er nie an.
+_ENV_VORHER = dict(os.environ)
 if _ENV_PATH.exists():
     load_dotenv(_ENV_PATH, override=True)
 else:
     load_dotenv(find_dotenv(usecwd=True), override=True)
+for _k, _v in _ENV_VORHER.items():
+    if _v and not os.environ.get(_k):
+        os.environ[_k] = _v
 
 
 def _env(name: str, default: str = "") -> str:
