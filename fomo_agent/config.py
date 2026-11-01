@@ -238,9 +238,23 @@ class Settings:
     # trust line of every feed (signals, fresh, exits) and lowering it would count unipcs (45)
     # and the other seed targets as trusted product-wide.
     hot_delta: float = field(default_factory=lambda: _float("HOT_DELTA", 1.0))
+    # Eigene Score-Schwelle NUR fuer die Burst-Erkennung. Default = TRUSTED (60), damit sich
+    # ohne Zutun nichts aendert. Wird gebraucht, wenn eine Kohorte knapp unter der Vertrauens-
+    # linie kauft (STIP: Kaeufer 42-46 bei conviction 0,9955) und trotzdem alarmieren soll.
+    hot_min_score: int = field(default_factory=lambda: _int("HOT_MIN_SCORE", 60))
     hot_window_min: int = field(default_factory=lambda: _int("HOT_WINDOW_MIN", 30))
     hot_min_wallets: int = field(default_factory=lambda: _int("HOT_MIN_WALLETS", 3))
     hot_max_age_h: int = field(default_factory=lambda: _int("HOT_MAX_AGE_H", 0))
+    # The second signal class (pipeline/listings.py): a new listing with real money in it and no
+    # cohort yet. The burst rule asks whose money arrived; this asks whether there is a market at
+    # all, because on 2026-11-01 PONS ($66.4M depth, $50M turnover in a day) and two "Claude"
+    # tokens (+744% and +609% on $10M pools) ran past every feed for the only reason that no
+    # wallet we track had touched them. Three gates, all of them the pool: depth, turnover against
+    # that depth, and not one roster fill yet. A lead, not a conviction - nothing is bought here.
+    listing_min_liq_usd: float = field(default_factory=lambda: _float("LISTING_MIN_LIQ_USD", 1_000_000))
+    listing_min_volume_ratio: float = field(
+        default_factory=lambda: _float("LISTING_MIN_VOLUME_RATIO", 1.0))
+    listing_max_age_h: int = field(default_factory=lambda: _int("LISTING_MAX_AGE_H", 72))
     # Whose trade a fill is (pipeline/provenance.py). A buy under max(the floor, this share of the
     # wallet's median buy) is dust. Two percent, not ten: a trader with a $5,000 median scaling
     # into a name at $150 to $380 is trading, and at ten percent three of those hid a token with

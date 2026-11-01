@@ -100,7 +100,7 @@ def hot_now(conn: sqlite3.Connection, chain: str | None = None, delta: float = 3
         f"WHERE tr.side='buy' AND t.score >= ?{not_quote}{REAL.format(t='tr')}"
         + (" AND tr.chain=?" if chain else "") + NOT_SEEDED.format(t="tr") + NOT_UNSELLABLE.format(t="tr") +
         " GROUP BY tr.mint, tr.address HAVING first_ts >= ?",
-        [TRUSTED, *([chain] if chain else []), *seeded_params(now), since],
+        [settings.hot_min_score, *([chain] if chain else []), *seeded_params(now), since],
     ).fetchall()
     by_mint: dict[str, list] = defaultdict(list)
     meta: dict[str, tuple] = {}
