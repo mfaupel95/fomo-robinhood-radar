@@ -36,21 +36,27 @@ def seed(conn, now, rows, created_ago_s=3600, sellable=None):
 
 
 def test_todays_three_listings_are_judged_on_turnover_against_depth(tmp_path):
-    """With the bar as agreed (volume >= depth) only the $13.05M one clears it — measured, not
-    assumed: PONS trades 0.75x its depth in a day, the $6.6M Claude 0.64x."""
+    """With the bar as agreed now (0.6x depth) all three clear it — measured, not assumed:
+    Claude 0x0e9f trades 1.27x its depth in a day, PONS 0.75x, the $6.6M Claude 0.64x. The
+    1.0 bar this rule first shipped with caught only the first and hid the very listings it
+    exists for."""
     conn = db.connect(tmp_path / "listings.db")
     now = db.now()
     seed(conn, now, MEASURED)
     got = listings.candidates(conn, "robinhood", now=now)
-    assert [(c["mint"], c["volume_ratio"]) for c in got] == [(CLAUDE_B, 1.271)]
+    assert [(c["mint"], round(c["volume_ratio"], 3)) for c in got] == [
+        (CLAUDE_B, 1.271), (PONS, 0.753), (CLAUDE_A, 0.644)]
 
 
 def test_the_ratio_is_the_only_thing_keeping_the_other_two_out(tmp_path):
-    """PONS at $66.4M of depth is the largest listing of the week; it fails on turnover alone.
-    Lowering the bar to 0.6 (LISTING_MIN_VOLUME_RATIO) catches all three — a decision, not a bug."""
+    """PONS at $66.4M of depth is the largest listing of the week; it fails on turnover alone at
+    1.0. Lowering the bar to 0.6 (LISTING_MIN_VOLUME_RATIO) catches all three — a decision, not
+    a bug."""
     conn = db.connect(tmp_path / "listings.db")
     now = db.now()
     seed(conn, now, MEASURED)
+    strict = listings.candidates(conn, "robinhood", now=now, min_volume_ratio=1.0)
+    assert [c["mint"] for c in strict] == [CLAUDE_B], "the old bar caught one of three"
     got = listings.candidates(conn, "robinhood", now=now, min_volume_ratio=0.6)
     assert {c["mint"] for c in got} == {PONS, CLAUDE_A, CLAUDE_B}
     assert [round(c["volume_ratio"], 2) for c in got] == [1.27, 0.75, 0.64], "hottest first"
@@ -81,7 +87,7 @@ def test_one_roster_fill_hands_the_token_back_to_the_cohort_rule(tmp_path):
         db.upsert_trader(conn, WALLET, chain="robinhood", score=70, status="watch")
         db.insert_trade(conn, sig="f1", address=WALLET, chain="robinhood", mint=CLAUDE_B,
                         side="buy", usd_value=500.0, token_amount=10.0, ts=now - 60, source="rpc")
-    assert [c["mint"] for c in listings.candidates(conn, "robinhood", now=now)] == []
+    assert [c["mint"] for c in listings.candidates(conn, "robinhood", now=now)] == [PONS, CLAUDE_A]
 
 
 def test_an_old_listing_is_not_news(tmp_path):
@@ -103,12 +109,12 @@ def test_a_pool_is_recorded_once_however_long_it_stays_liquid(tmp_path):
     conn = db.connect(tmp_path / "listings.db")
     now = db.now()
     seed(conn, now, MEASURED)
-    assert listings.sweep(conn, "robinhood", now=now)["new"] == 1
+    assert listings.sweep(conn, "robinhood", now=now)["new"] == 3
     assert listings.sweep(conn, "robinhood", now=now + 600)["new"] == 0
-    assert len(conn.execute("SELECT 1 FROM listing_signals").fetchall()) == 1
+    assert len(conn.execute("SELECT 1 FROM listing_signals").fetchall()) == 3
     rec = listings.recent(conn, "robinhood", now=now + 3600)
-    assert [r["mint"] for r in rec] == [CLAUDE_B]
-    assert rec[0]["ts"] == now, "the first moment it qualified is what the reader is told"
+    assert {r["mint"] for r in rec} == {PONS, CLAUDE_A, CLAUDE_B}
+    assert all(r["ts"] == now for r in rec), "the first moment it qualified is what the reader is told"
 
 
 def test_a_lead_carries_todays_pool_and_not_the_one_it_was_found_with(tmp_path):
@@ -118,7 +124,7 @@ def test_a_lead_carries_todays_pool_and_not_the_one_it_was_found_with(tmp_path):
     listings.sweep(conn, "robinhood", now=now)
     with db.tx(conn):
         db.upsert_token(conn, CLAUDE_B, liquidity_usd=25_000_000, volume_usd=40_000_000)
-    r = listings.recent(conn, "robinhood", now=now + 600)[0]
+    r = next(x for x in listings.recent(conn, "robinhood", now=now + 600) if x["mint"] == CLAUDE_B)
     assert r["liq"] == 25_000_000 and round(r["volume_ratio"], 3) == 1.6
 
 
@@ -156,5 +162,5 @@ def test_geckoterminal_pool_keeps_the_pools_turnover():
 
 def test_the_thresholds_are_settings_not_constants():
     assert settings.listing_min_liq_usd == 1_000_000
-    assert settings.listing_min_volume_ratio == 1.0
+    assert settings.listing_min_volume_ratio == 0.6
     assert settings.listing_max_age_h == 72
