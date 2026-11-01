@@ -22,3 +22,8 @@ def _no_gate_unless_asked(monkeypatch, tmp_path):
     monkeypatch.setattr(settings, "x_enabled", False)
     # the older fixtures place a cohort's buys seconds apart; the span rule is tested on its own
     monkeypatch.setattr(settings, "hot_min_span_s", 0)
+    # the second signal class's bars are the operator's (.env), and the box has its own: pin the
+    # documented defaults here so a test measures the rule and not what somebody typed today
+    monkeypatch.setattr(settings, "listing_min_liq_usd", 1_000_000.0)
+    monkeypatch.setattr(settings, "listing_min_volume_ratio", 1.0)
+    monkeypatch.setattr(settings, "listing_max_age_h", 72)
