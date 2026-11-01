@@ -82,12 +82,16 @@ def parse_pair(p: dict) -> NewToken | None:
     liq = (p.get("liquidity") or {}).get("usd")
     # arrives as a string; it is what marks an open position to market
     price = p.get("priceUsd")
+    # the pool's turnover, in the same response as its depth: the second signal class is judged on
+    # the two together (pipeline/listings.py), so it is read here rather than asked for later
+    volume = (p.get("volume") or {}).get("h24")
     return NewToken(
         mint=norm_addr(mint),
         chain=p.get("chainId") or "solana",
         symbol=base.get("symbol"),
         mcap_usd=p.get("marketCap") or p.get("fdv"),
         liquidity_usd=liq,
+        volume_usd=float(volume) if volume not in (None, "") else None,
         price_usd=float(price) if price not in (None, "") else None,
         created_at=int(created_ms / 1000) if created_ms else None,
         dex=p.get("dexId"),

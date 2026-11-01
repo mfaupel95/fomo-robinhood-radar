@@ -395,6 +395,66 @@ def hot_cmd(
         conn.close()
 
 
+@app.command("listings")
+def listings_cmd(
+    sweep: bool = typer.Option(False, "--sweep", help="run the rule now instead of only reading"),
+    hours: int = typer.Option(168, "--hours", help="how far back to read recorded leads"),
+) -> None:
+    """Liquid new listings: depth, 24h turnover against it, and not one roster fill.
+
+    The second signal class. The burst rule reports whose money arrived; this reports a pool with
+    a real market in it that nobody we track has touched yet, which is exactly what the wallet
+    gate cannot see.
+    """
+    from .pipeline import listings
+
+    conn = db.connect()
+    chain = settings.dex_chains[0] if settings.dex_chains else None
+    try:
+        if sweep:
+            typer.echo(listings.sweep(conn, chain))
+        rows = listings.recent(conn, chain, hours=hours)
+        if not rows:
+            typer.echo("no liquid listing on record — run with --sweep after an enrichment pass")
+        for r in rows:
+            ratio = f"{r['volume_ratio']:.2f}x" if r["volume_ratio"] is not None else "-"
+            typer.echo(f"{r['sym']:<12} depth ${r['liq'] or 0:,.0f}  24h ${r['vol24'] or 0:,.0f} "
+                       f"({ratio})  mcap ${r['mcap'] or 0:,.0f}  seen {r['age_h_at_read']:.1f}h ago  "
+                       f"{r['mint']}")
+    finally:
+        conn.close()
+
+
+@app.command("pnl")
+def pnl_cmd(
+    hours: int = typer.Option(72, "--hours", help="tape entries of the last N hours"),
+    detail: bool = typer.Option(False, "--detail", help="list every position with its verdict"),
+) -> None:
+    """What the cohort could take out (the official figure), and what is only paper.
+
+    Realizable means the token has a market to sell into and a mark: that is the PnL. Paper means
+    no pool, no mark, or `sell-check` said the transfer cannot clear — reported beside it, never
+    as the headline.
+    """
+    from .pipeline.analyze import cohort_pnl, usd
+
+    conn = db.connect()
+    try:
+        p = cohort_pnl(conn, hours=hours)
+        real, paper = p["realizable"], p["paper"]
+        typer.echo(f"realizable {usd(real['pnl'])} on {usd(real['cost'])} "
+                   f"({real['positions']} of {len(p['positions'])} positions have a market)")
+        typer.echo(f"paper      {usd(paper['pnl'])} on {usd(paper['cost'])} "
+                   f"({paper['positions']} positions) — a note, not PnL")
+        if detail:
+            for r in p["positions"]:
+                tag = r["why"] or "sellable"
+                typer.echo(f"  {(r['sym'] or r['token'][:10]):<14}{usd(r['pnl']):>10} "
+                           f"{usd(r['cost']):>10}  {r['state']:<8} {tag}")
+    finally:
+        conn.close()
+
+
 @app.command("sell-check")
 def sell_check_cmd(mint: str = typer.Argument(..., help="token address"),
                    force: bool = typer.Option(True, "--force/--cached", help="ask again even if recent")) -> None:
@@ -867,6 +927,10 @@ def run(once: bool = typer.Option(False, "--once", help="single pass of every st
          lambda c: d.discover_trenches(c) if "trenches" in settings.track_sources else {"skipped": "trenches disabled"}),
         ("discover_leaderboard", settings.discover_interval, lambda c: d.discover_leaderboard(c, fomo) if fomo else {"skipped": "fomo not configured"}),
         ("new_tokens", settings.new_tokens_interval, lambda c: nt.poll_new_tokens(c, None, fomo)),
+        # the second signal class: pools with real money and no roster fill yet. Cheap (reads the
+        # tokens table), and every pass is what would have caught PONS and the two Claude mints
+        ("listings", settings.new_tokens_interval,
+         lambda c: __import__("fomo_agent.pipeline.listings", fromlist=["sweep"]).sweep(c)),
         # free on Robinhood Chain, and it is what turns collected fomo users into trackable wallets
         ("resolve", settings.discover_interval, lambda c: rs.resolve_pending(c)),
         ("track", settings.track_interval, lambda c: tr.track_all(c)),

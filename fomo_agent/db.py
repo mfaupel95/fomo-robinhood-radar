@@ -359,6 +359,19 @@ MIGRATIONS: dict[int, str] = {
     -- latency report cannot say whether the watcher is actually the production path.
     ALTER TABLE trades ADD COLUMN writer TEXT;
     """,
+    34: """
+    -- The second signal class (pipeline/listings.py): a new listing with real money in it and no
+    -- cohort yet. It is judged on the pool, not on a wallet, so the pool's turnover has to be
+    -- stored beside its depth - DexScreener returns `volume.h24` in the same response the
+    -- liquidity already came from, so it costs no request.
+    ALTER TABLE tokens ADD COLUMN volume_usd REAL;
+    CREATE TABLE IF NOT EXISTS listing_signals(
+      mint TEXT PRIMARY KEY,
+      chain TEXT, ts INTEGER, symbol TEXT,
+      liquidity_usd REAL, volume_usd REAL, mcap_usd REAL, volume_ratio REAL, age_s INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS idx_listing_signals_ts ON listing_signals(ts);
+    """,
 }
 
 STATUSES = ("candidate", "tracking", "active", "watch", "idle", "dropped", "needs_review")

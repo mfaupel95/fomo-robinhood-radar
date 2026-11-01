@@ -729,6 +729,73 @@ def analyze_trader(conn: sqlite3.Connection, who: str, hours: int = 168) -> dict
     }
 
 
+# ---------------------------------------------------------------- the PnL that counts
+
+def cohort_pnl(conn: sqlite3.Connection, hours: int = 72, chain: str | None = None,
+               now: int | None = None, addresses: list[str] | None = None) -> dict:
+    """The cohort's open positions split into the two numbers a reader must never confuse.
+
+    *realizable* — positions whose token has a market we can sell into: something a wallet could
+    turn into dollars today. This is the PnL. *paper* — positions marked off an indexer echo with
+    no pool to sell into, or a token the safety check found unsellable (an anti-whale cap, a trap
+    pool). They are worth showing and are worth nothing: PEAT/OYSTERS/TENDIES read +$4.1k of paper
+    profit for two days while `sell-check` said the transfer to the router could not clear.
+
+    The split is per position and per token, so it is decided by `tokens.sellable` and by whether
+    a mark exists at all — never by how good the number looks.
+    """
+    now = now or db.now()
+    if addresses is None:
+        rows = conn.execute(
+            "SELECT DISTINCT tr.address address, t.fomo_user_id user_id FROM trades tr "
+            "LEFT JOIN traders t ON t.address = tr.address "
+            "WHERE tr.side = 'buy' AND tr.ts >= ? AND COALESCE(tr.kind, 'trade') = 'trade'"
+            + NOT_QUOTE.format(col="tr.mint") + (" AND tr.chain = ?" if chain else ""),
+            [now - hours * 3600, *([chain] if chain else [])]).fetchall()
+        addresses = [r["address"] for r in rows]
+        users = {r["address"]: r["user_id"] for r in rows}
+    else:
+        users = {r["address"]: r["fomo_user_id"] for r in conn.execute(
+            f"SELECT address, fomo_user_id FROM traders WHERE address IN "
+            f"({','.join('?' * len(addresses))})", addresses)} if addresses else {}
+
+    split = {"realizable": {"pnl": 0.0, "cost": 0.0, "positions": 0},
+             "paper": {"pnl": 0.0, "cost": 0.0, "positions": 0}}
+    positions = []
+    for address in addresses:
+        b = book(conn, address, users.get(address))
+        for p in b["positions"]:
+            token = conn.execute("SELECT sellable FROM tokens WHERE mint=?", (p["token"],)).fetchone()
+            sellable = token["sellable"] if token else None
+            worth, pnl = p.get("worth"), p.get("pnl")
+            if sellable == 0:
+                why = "unsellable"
+            elif worth is None or pnl is None:
+                why = "no mark"
+            else:
+                why = None
+            kind = "paper" if why else "realizable"
+            split[kind]["positions"] += 1
+            split[kind]["cost"] += p.get("cost") or 0.0
+            if pnl:
+                split[kind]["pnl"] += pnl
+            positions.append({
+                "address": address, "sym": p.get("sym"), "token": p["token"],
+                "state": p.get("state"), "pnl": pnl, "cost": p.get("cost"), "worth": worth,
+                "kind": kind, "why": why,
+            })
+    positions.sort(key=lambda r: (r["kind"] != "realizable", -(r["worth"] or 0)))
+    for k in split.values():
+        k["pnl"] = round(k["pnl"], 2)
+        k["cost"] = round(k["cost"], 2)
+    return {
+        "hours": hours, "wallets": len(addresses), "positions": positions,
+        "realizable": split["realizable"], "paper": split["paper"],
+        # the headline: what the cohort could actually take out, and nothing else
+        "pnl_usd": split["realizable"]["pnl"],
+    }
+
+
 # ---------------------------------------------------------------- terminal output
 
 def usd(v) -> str:

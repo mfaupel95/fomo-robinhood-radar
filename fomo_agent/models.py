@@ -74,6 +74,10 @@ class NewToken(BaseModel):
     symbol: str | None = None
     mcap_usd: float | None = None
     liquidity_usd: float | None = None
+    # the pool's 24h turnover. Together with the liquidity it is what the second signal class
+    # (pipeline/listings.py) is judged on: a new listing whose pool turned over its own depth
+    # is a market, not a launch. None means the source did not say, which is not a zero.
+    volume_usd: float | None = None
     price_usd: float | None = None
     decimals: int | None = None
     # the deepest pool this token trades in; the candle endpoint takes no other handle

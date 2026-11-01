@@ -679,6 +679,29 @@ def hot_route(
     }
 
 
+@app.get("/api/listings", tags=["signals"])
+def listings_route(
+    hours: int = Query(168, ge=1, le=720),
+    limit: int = Query(50, ge=1, le=200),
+    conn: sqlite3.Connection = Depends(get_conn),
+) -> dict:
+    """The second signal class: a new listing with depth, turnover and not one roster fill.
+
+    No wallet of ours is in it — that is the whole point, so it is a lead and never a conviction.
+    `now` is what qualifies this minute, straight from the tokens table; `recent` is every lead the
+    pass wrote down in the window.
+    """
+    from .pipeline import listings
+
+    return {
+        "min_liq_usd": settings.listing_min_liq_usd,
+        "min_volume_ratio": settings.listing_min_volume_ratio,
+        "max_age_h": settings.listing_max_age_h, "hours": hours,
+        "now": listings.candidates(conn, chain(), limit=limit),
+        "recent": listings.recent(conn, chain(), hours=hours, limit=limit),
+    }
+
+
 def _pool_candles(conn: sqlite3.Connection, hours: int):
     """mint -> the pool's candles over the window, from the same cache the token page fills."""
     span = "24h" if hours <= 24 else "7d" if hours <= 168 else "30d"
