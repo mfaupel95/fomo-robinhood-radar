@@ -43,7 +43,7 @@ def test_todays_three_listings_are_judged_on_turnover_against_depth(tmp_path):
     conn = db.connect(tmp_path / "listings.db")
     now = db.now()
     seed(conn, now, MEASURED)
-    got = listings.candidates(conn, "robinhood", now=now)
+    got = listings.candidates(conn, "robinhood", now=now, min_volume_ratio=0.6)
     assert [(c["mint"], round(c["volume_ratio"], 3)) for c in got] == [
         (CLAUDE_B, 1.271), (PONS, 0.753), (CLAUDE_A, 0.644)]
 
@@ -87,7 +87,8 @@ def test_one_roster_fill_hands_the_token_back_to_the_cohort_rule(tmp_path):
         db.upsert_trader(conn, WALLET, chain="robinhood", score=70, status="watch")
         db.insert_trade(conn, sig="f1", address=WALLET, chain="robinhood", mint=CLAUDE_B,
                         side="buy", usd_value=500.0, token_amount=10.0, ts=now - 60, source="rpc")
-    assert [c["mint"] for c in listings.candidates(conn, "robinhood", now=now)] == [PONS, CLAUDE_A]
+    assert [c["mint"] for c in listings.candidates(conn, "robinhood", now=now,
+                                                    min_volume_ratio=0.6)] == [PONS, CLAUDE_A]
 
 
 def test_an_old_listing_is_not_news(tmp_path):
@@ -105,7 +106,8 @@ def test_a_token_nobody_can_sell_is_not_a_lead(tmp_path):
     assert listings.candidates(conn, "robinhood", now=now) == []
 
 
-def test_a_pool_is_recorded_once_however_long_it_stays_liquid(tmp_path):
+def test_a_pool_is_recorded_once_however_long_it_stays_liquid(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "listing_min_volume_ratio", 0.6)
     conn = db.connect(tmp_path / "listings.db")
     now = db.now()
     seed(conn, now, MEASURED)
@@ -161,6 +163,8 @@ def test_geckoterminal_pool_keeps_the_pools_turnover():
 
 
 def test_the_thresholds_are_settings_not_constants():
+    """The bars come from .env, so an operator moves them without touching the rule. The suite
+    pins the documented defaults (tests/conftest.py) so a test measures the rule, not today's box."""
     assert settings.listing_min_liq_usd == 1_000_000
-    assert settings.listing_min_volume_ratio == 0.6
+    assert settings.listing_min_volume_ratio == 1.0
     assert settings.listing_max_age_h == 72
