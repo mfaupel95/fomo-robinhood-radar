@@ -158,3 +158,15 @@ def test_a_distributing_wallet_is_watch_at_most_and_the_card_says_so(tmp_path, m
     assert "watch" in card and "apart" in card and "fomo counts open positions" in card
     # a wallet that buys and sells alike is trading, not distributing; a small seller neither
     assert analyze.distributing(60_000, 70_000) is None and analyze.distributing(100, 20_000) is None
+
+
+def test_an_invented_tag_does_not_cost_the_verdict():
+    """The model calls a wallet with no fills on our tape "idle", which is not a red_flag in
+    the enum. The tag is advisory: drop it and keep the verdict instead of failing the wallet."""
+    from fomo_agent.models import ScoreResult
+    res = ScoreResult.model_validate({
+        "score": 15, "status": "dropped", "style": ["swing", "ghost"],
+        "red_flags": ["idle", "bot"], "summary": "No activity on our tape.",
+        "confidence": 0.6})
+    assert res.red_flags == ["bot"] and res.style == ["swing"]
+    assert res.status == "dropped" and res.score == 15

@@ -1,9 +1,16 @@
 """Pydantic models shared across sources and pipeline."""
 from __future__ import annotations
 
+import logging
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+log = logging.getLogger(__name__)
+
+# the tag vocabularies a verdict may use; anything else is a model invention and is dropped
+SCORE_STYLES = {"sniper", "swing", "scalper", "holder", "copy-follower"}
+SCORE_RED_FLAGS = {"bot", "bundler", "insider-like", "wash", "one-hit", "distributing"}
 
 WSOL_MINT = "So11111111111111111111111111111111111111112"
 STABLE_MINTS = {
@@ -110,10 +117,30 @@ class Trade(BaseModel):
 
 
 class ScoreResult(BaseModel):
-    """Strict schema for Claude scoring output."""
+    """Strict schema for Claude scoring output.
+
+    `score`, `status` and `confidence` are the verdict and stay strict. `style` and `red_flags`
+    are advisory tags, so an invented one is dropped rather than allowed to fail validation and
+    throw the whole verdict away: a model calls a wallet with no fills on our tape "idle", which
+    is not in the enum, and that cost 25 of 30 verdicts in the 01.11.2026 pass.
+    """
     score: int = Field(ge=0, le=100)
     status: Literal["active", "watch", "dropped"]
     style: list[Literal["sniper", "swing", "scalper", "holder", "copy-follower"]] = []
     red_flags: list[Literal["bot", "bundler", "insider-like", "wash", "one-hit", "distributing"]] = []
     summary: str
     confidence: float = Field(ge=0, le=1)
+
+    @field_validator("style", "red_flags", mode="before")
+    @classmethod
+    def _drop_unknown_tags(cls, value, info):
+        allowed = SCORE_STYLES if info.field_name == "style" else SCORE_RED_FLAGS
+        if not isinstance(value, list):
+            return value
+        kept = []
+        for tag in value:
+            if isinstance(tag, str) and tag.strip().lower() in allowed:
+                kept.append(tag.strip().lower())
+            else:
+                log.warning("score: dropping unknown %s tag %r", info.field_name, tag)
+        return kept

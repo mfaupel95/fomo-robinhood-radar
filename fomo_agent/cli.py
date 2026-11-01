@@ -934,6 +934,12 @@ def run(once: bool = typer.Option(False, "--once", help="single pass of every st
         # tokens table), and every pass is what would have caught PONS and the two Claude mints
         ("listings", settings.new_tokens_interval,
          lambda c: __import__("fomo_agent.pipeline.listings", fromlist=["sweep"]).sweep(c)),
+        # the fomo half over plain HTTP (fomoapi.io). It used to be reachable only through the
+        # CLI, so a configured key collected nothing while the health check said "never
+        # collected" - the browser path is dead (FOMO_SESSION is a 1h bearer), this one is not.
+        # Two credits a pass, so it runs at the board cadence the budget was designed around.
+        ("fomoapi", 2 * 3600,
+         lambda c: __import__("fomo_agent.pipeline.collect_api", fromlist=["collect"]).collect(c, ("24h", "7d"), None) if settings.fomoapi_key else {"skipped": "FOMOAPI_KEY not set"}),
         # free on Robinhood Chain, and it is what turns collected fomo users into trackable wallets
         ("resolve", settings.discover_interval, lambda c: rs.resolve_pending(c)),
         ("track", settings.track_interval, lambda c: tr.track_all(c)),
