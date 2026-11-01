@@ -39,3 +39,6 @@ id_*
 assets/brand/.fonts/
 x_token.json
 x_client.env
+
+# Browser-Dump der fomo-Session (Privy-Bearer, 1 h TTL) - niemals ins Repo
+fomo-session.json
