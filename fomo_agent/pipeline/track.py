@@ -31,6 +31,13 @@ log = logging.getLogger(__name__)
 # trade it re-enters the scoring queue as `tracking` (track_all flips it).
 TRACKED = ("candidate", "tracking", "active", "watch", "idle")
 
+# The fill scan also reads `dropped` wallets. They are not judged any more, but they are not
+# gone either: on 2026-11-01 six of seven fills of the day came from that group, including the
+# only large sell, and the tape was blind to every one of them. This constant is for the fill
+# scan ONLY - `TRACKED` stays the roster for holdings, backfill and the watcher's own heartbeat,
+# so nothing about status, score, bursts or alerts changes for a dropped wallet.
+TRACKED_SCAN = TRACKED + ("dropped",)
+
 
 class Tracker(Protocol):
     def supports(self, chain: str) -> bool: ...
@@ -120,9 +127,11 @@ def track_wallet(conn: sqlite3.Connection, tracker: Tracker, address: str, chain
 
 def track_all(conn: sqlite3.Connection, trackers: list[Tracker] | None = None, limit: int | None = None) -> dict:
     trackers = trackers or build_trackers()
-    rows = db.traders_by_status(conn, *TRACKED)
-    # least-recently-tracked first, so a large candidate pool rotates fairly under the request budget
-    rows.sort(key=lambda r: r["last_tracked_ts"] or 0)
+    rows = db.traders_by_status(conn, *TRACKED_SCAN)
+    # least-recently-tracked first, so a large candidate pool rotates fairly under the request
+    # budget - but the roster we actually judge goes first, and `dropped` only fills what is
+    # left. Widening the scan must never cost a tracked wallet its tick.
+    rows.sort(key=lambda r: (r["status"] == "dropped", r["last_tracked_ts"] or 0))
     rows = rows[: (limit or settings.track_max_wallets_per_pass)]
     # batch sources index a whole roster in one shot; tell them which wallets this pass needs
     for t in trackers:
