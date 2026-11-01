@@ -14,6 +14,7 @@ WALLET = "0x" + "a" * 40
 SELLABLE = "0x" + "1" * 40
 TRAP = "0x" + "2" * 40
 UNMARKED = "0x" + "3" * 40
+UNCHECKED = "0x" + "4" * 40
 
 
 def seed(conn, now):
@@ -34,6 +35,11 @@ def seed(conn, now):
         db.insert_trade(conn, sig="c", address=WALLET, chain="robinhood", mint=UNMARKED,
                         side="buy", usd_value=200.0, token_amount=200.0,
                         ts=now - 7200, source="rpc")
+        # marked, but nobody has run sell-check on it: +$600 that must not enter the PnL
+        db.upsert_token(conn, UNCHECKED, chain="robinhood", symbol="NOCK", price_usd=4.0)
+        db.insert_trade(conn, sig="d", address=WALLET, chain="robinhood", mint=UNCHECKED,
+                        side="buy", usd_value=200.0, token_amount=200.0,
+                        ts=now - 7200, source="rpc")
 
 
 def test_the_official_number_is_the_realizable_one(tmp_path):
@@ -47,7 +53,8 @@ def test_the_official_number_is_the_realizable_one(tmp_path):
     assert p["paper"]["pnl"] == 4500.0, "the trap mark is counted, and counted apart"
     assert p["paper"]["cost"] == 700.0, "both paper positions, at what they cost"
     assert p["paper"]["positions"] == 2, "the unsellable one and the one nobody can price"
-    assert p["pnl_usd"] == 1000.0, "the headline never adds the paper"
+    assert p["unchecked"]["pnl"] == 600.0, "a mark without a sell-check is not money either"
+    assert p["pnl_usd"] == 1000.0, "the headline never adds the paper or the unchecked"
 
 
 def test_each_position_says_why_it_is_paper(tmp_path):
@@ -59,6 +66,7 @@ def test_each_position_says_why_it_is_paper(tmp_path):
     assert why["REAL"] == ("realizable", None)
     assert why["PAPER"] == ("paper", "unsellable")
     assert why["NOMARK"] == ("paper", "no mark")
+    assert why["NOCK"] == ("unchecked", "not checked")
     assert p["positions"][0]["kind"] == "realizable", "realizable first, whatever its size"
 
 
@@ -69,9 +77,10 @@ def test_the_report_leads_with_the_realizable_figure_and_marks_the_paper(tmp_pat
     md = build_report(conn)
     pnl = md.index("## PnL")
     real = md.index("realizable")
+    unchecked = md.index("not counted")
     paper = md.index("paper, not PnL")
-    assert pnl < real < paper, "the realizable figure is stated before the paper note"
-    assert "$1.0k realizable" in md and "$4.5k" in md
+    assert pnl < real < unchecked < paper, "realizable first, every other figure after it"
+    assert "$1.0k realizable" in md and "$4.5k" in md and "$600" in md
     assert "never the headline" in md
 
 

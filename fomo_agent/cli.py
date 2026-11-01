@@ -441,9 +441,12 @@ def pnl_cmd(
     conn = db.connect()
     try:
         p = cohort_pnl(conn, hours=hours)
-        real, paper = p["realizable"], p["paper"]
+        real, paper, unchecked = p["realizable"], p["paper"], p["unchecked"]
         typer.echo(f"realizable {usd(real['pnl'])} on {usd(real['cost'])} "
-                   f"({real['positions']} of {len(p['positions'])} positions have a market)")
+                   f"({real['positions']} of {len(p['positions'])} positions passed the sell check)")
+        if unchecked["positions"]:
+            typer.echo(f"unchecked  {usd(unchecked['pnl'])} on {usd(unchecked['cost'])} "
+                       f"({unchecked['positions']} positions, no sell-check yet) — not in the PnL")
         typer.echo(f"paper      {usd(paper['pnl'])} on {usd(paper['cost'])} "
                    f"({paper['positions']} positions) — a note, not PnL")
         if detail:

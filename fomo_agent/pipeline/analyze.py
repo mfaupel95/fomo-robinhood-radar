@@ -733,16 +733,17 @@ def analyze_trader(conn: sqlite3.Connection, who: str, hours: int = 168) -> dict
 
 def cohort_pnl(conn: sqlite3.Connection, hours: int = 72, chain: str | None = None,
                now: int | None = None, addresses: list[str] | None = None) -> dict:
-    """The cohort's open positions split into the two numbers a reader must never confuse.
+    """The cohort's open positions split into what may be quoted and what may not.
 
-    *realizable* — positions whose token has a market we can sell into: something a wallet could
-    turn into dollars today. This is the PnL. *paper* — positions marked off an indexer echo with
-    no pool to sell into, or a token the safety check found unsellable (an anti-whale cap, a trap
-    pool). They are worth showing and are worth nothing: PEAT/OYSTERS/TENDIES read +$4.1k of paper
-    profit for two days while `sell-check` said the transfer to the router could not clear.
+    *realizable* — the token passed the safety check (`tokens.sellable = 1`): a wallet could turn
+    the position into dollars today. This is the PnL. *unchecked* — nobody has asked `sell-check`
+    yet, so the mark is a mark and not money; it is reported, and it is not added to the PnL.
+    *paper* — the check said no (an anti-whale cap, a trap pool) or there is no mark at all:
+    worth showing, worth nothing. PEAT/OYSTERS/TENDIES carried +$4.1k of it for two days while
+    `sell-check` said the transfer to the router could not clear.
 
-    The split is per position and per token, so it is decided by `tokens.sellable` and by whether
-    a mark exists at all — never by how good the number looks.
+    The split is per position and per token, decided by `tokens.sellable` and by whether a mark
+    exists — never by how good the number looks.
     """
     now = now or db.now()
     if addresses is None:
@@ -759,22 +760,28 @@ def cohort_pnl(conn: sqlite3.Connection, hours: int = 72, chain: str | None = No
             f"SELECT address, fomo_user_id FROM traders WHERE address IN "
             f"({','.join('?' * len(addresses))})", addresses)} if addresses else {}
 
-    split = {"realizable": {"pnl": 0.0, "cost": 0.0, "positions": 0},
-             "paper": {"pnl": 0.0, "cost": 0.0, "positions": 0}}
+    split = {k: {"pnl": 0.0, "cost": 0.0, "positions": 0}
+             for k in ("realizable", "unchecked", "paper")}
+    since = now - hours * 3600
     positions = []
     for address in addresses:
         b = book(conn, address, users.get(address))
         for p in b["positions"]:
+            # the window is the cohort's, not the wallet's: a name entered before it is somebody
+            # else's position and would drag three days of other trades into one figure
+            if since and (p.get("first_ts") or 0) < since:
+                continue
             token = conn.execute("SELECT sellable FROM tokens WHERE mint=?", (p["token"],)).fetchone()
             sellable = token["sellable"] if token else None
             worth, pnl = p.get("worth"), p.get("pnl")
             if sellable == 0:
-                why = "unsellable"
+                kind, why = "paper", "unsellable"
             elif worth is None or pnl is None:
-                why = "no mark"
+                kind, why = "paper", "no mark"
+            elif sellable != 1:
+                kind, why = "unchecked", "not checked"
             else:
-                why = None
-            kind = "paper" if why else "realizable"
+                kind, why = "realizable", None
             split[kind]["positions"] += 1
             split[kind]["cost"] += p.get("cost") or 0.0
             if pnl:
@@ -784,13 +791,15 @@ def cohort_pnl(conn: sqlite3.Connection, hours: int = 72, chain: str | None = No
                 "state": p.get("state"), "pnl": pnl, "cost": p.get("cost"), "worth": worth,
                 "kind": kind, "why": why,
             })
-    positions.sort(key=lambda r: (r["kind"] != "realizable", -(r["worth"] or 0)))
+    order = {"realizable": 0, "unchecked": 1, "paper": 2}
+    positions.sort(key=lambda r: (order[r["kind"]], -(r["worth"] or 0)))
     for k in split.values():
         k["pnl"] = round(k["pnl"], 2)
         k["cost"] = round(k["cost"], 2)
     return {
         "hours": hours, "wallets": len(addresses), "positions": positions,
-        "realizable": split["realizable"], "paper": split["paper"],
+        "realizable": split["realizable"], "unchecked": split["unchecked"],
+        "paper": split["paper"],
         # the headline: what the cohort could actually take out, and nothing else
         "pnl_usd": split["realizable"]["pnl"],
     }

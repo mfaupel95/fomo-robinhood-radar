@@ -33,13 +33,16 @@ def _pnl_section(conn: sqlite3.Connection, hours: int = 72) -> list[str]:
     from .analyze import cohort_pnl
 
     p = cohort_pnl(conn, hours=hours)
-    real, paper = p["realizable"], p["paper"]
+    real, paper, unchecked = p["realizable"], p["paper"], p["unchecked"]
     out = [f"## PnL (official figure: realizable, tape entries of the last {hours}h)\n"]
     if not p["positions"]:
         out.append("_no open positions in the window_\n")
         return out
     out.append(f"- **{_usd(real['pnl'])} realizable** on {_usd(real['cost'])} cost "
-               f"({real['positions']} of {len(p['positions'])} positions have a market to sell into)\n")
+               f"({real['positions']} of {len(p['positions'])} positions passed the sell check)\n")
+    if unchecked["positions"]:
+        out.append(f"- _not counted: {_usd(unchecked['pnl'])} on {_usd(unchecked['cost'])} "
+                   f"({unchecked['positions']} positions nobody has run `sell-check` on yet)\n")
     if paper["positions"]:
         out.append(f"- _paper, not PnL: {_usd(paper['pnl'])} on {_usd(paper['cost'])} "
                    f"({paper['positions']} positions with no market or unsellable) — a note, "
