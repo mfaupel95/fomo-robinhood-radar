@@ -125,6 +125,29 @@ def track_wallet(conn: sqlite3.Connection, tracker: Tracker, address: str, chain
     return inserted
 
 
+def promote_idle(conn: sqlite3.Connection) -> int:
+    """An idle wallet leaves its observation state at its first fill — whoever wrote that fill.
+
+    The flip used to live inside `track_wallet` alone, so it only fired when the pass itself
+    inserted the fill. In normal operation the chain watcher is the one that stores a first fill
+    (one tick after it happens), so a wallet that started trading stayed `idle` for good: still
+    on the roster, never in the scoring queue, never judged on the very evidence it produced.
+    Measured on the live tape before this existed: ten idle wallets held 44 fills, one of them
+    $44.6k, and none had a verdict.
+    """
+    rows = conn.execute(
+        "SELECT DISTINCT tr.address FROM traders tr JOIN trades t ON t.address = tr.address "
+        "WHERE tr.status = 'idle'"
+    ).fetchall()
+    if not rows:
+        return 0
+    with db.tx(conn):
+        for r in rows:
+            db.set_status(conn, r[0], "tracking")
+    log.info("idle wallets that traded -> tracking: %d", len(rows))
+    return len(rows)
+
+
 def track_all(conn: sqlite3.Connection, trackers: list[Tracker] | None = None, limit: int | None = None) -> dict:
     trackers = trackers or build_trackers()
     rows = db.traders_by_status(conn, *TRACKED_SCAN)
@@ -195,6 +218,7 @@ def track_all(conn: sqlite3.Connection, trackers: list[Tracker] | None = None, l
     # size every new flow fill against its wallet's own median, then move the medians on
     from .provenance import classify, refresh_medians
 
+    stats["promoted_idle"] = promote_idle(conn)   # a first fill the watcher stored counts too
     stats["kinds"] = classify(conn, since=0)   # every flow fill still unsized, however old
     refresh_medians(conn)
     log.info("track: %s", stats)

@@ -28,7 +28,7 @@ from ..sources.rpc import CHAIN, RobinhoodRPC, RpcError
 from . import noise, pro
 from .hot import hot_now, record
 from .provenance import classify
-from .track import TRACKED
+from .track import TRACKED, promote_idle
 
 log = logging.getLogger(__name__)
 
@@ -89,6 +89,11 @@ def tick(conn: sqlite3.Connection, w: Watch, now: int | None = None) -> dict:
         except Exception as e:  # noqa: BLE001
             log.warning("could not store decimals: %s", e)
     if stats["fills"]:
+        # a first fill flips an idle wallet into the scoring queue at the same tick — the watcher
+        # is normally the only writer of that fill, so the flip cannot live in the pass alone
+        from .track import promote_idle
+
+        stats["promoted_idle"] = promote_idle(conn)
         classify(conn, now - 3600)
         # an address that filled more in the hour than a person can is not tracked from here
         junk = noise.sweep(conn, now)
