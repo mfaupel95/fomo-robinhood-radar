@@ -16,6 +16,7 @@ Discovers Robinhood Chain memecoin traders (fomo.family + fresh-token holders), 
 - Scoring must keep working without `ANTHROPIC_API_KEY` via the `score --export` / `--import` loop.
 - Keep `pytest -q` green (offline fixture tests in `tests/`). Add a fixture + test for every new parser.
 - No secrets in code or docs. `.env` is gitignored.
+- **Act, don't ask.** When a loop report lists `Nächste Aktion` items, execute the ones that need no decision from Max in the same session (holdings re-read, price verify, re-entry check, enrich, health fix) and report the measured result. Only real decisions go to him: money/live switches, thresholds, keys/secrets, and anything irreversible. Standing instruction from Max, 2026-11-02.
 
 ## Environment quirks (Windows)
 - Run everything with `.venv/Scripts/python`; set `PYTHONIOENCODING=utf-8` for live runs (token names break cp1251).
