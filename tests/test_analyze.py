@@ -552,6 +552,22 @@ def test_an_empty_delivery_is_not_a_collection(tmp_path):
     assert got["fomo collection"]["ok"] is True
 
 
+def test_a_split_collect_step_still_reads_as_a_fresh_collection(tmp_path):
+    """The one `fomoapi` run step became three per-cadence steps, and the check kept querying the
+    old names — so it froze at the last row written under them and would have gone red while the
+    collector was ticking happily."""
+    from fomo_agent.pipeline.health import checks
+
+    c = db.connect(tmp_path / "h.db")
+    now = db.now()
+    with db.tx(c):
+        rid = db.run_start(c, "fomoapi_24h")
+        c.execute("UPDATE runs SET finished_at=?, stats_json=? WHERE id=?",
+                  (now - 600, '{"windows": {"24h": 150}, "credits": 6.0}', rid))
+    got = {k["name"]: k for k in checks(c, rpc=None)}
+    assert got["fomo collection"]["ok"] is True, got["fomo collection"]["detail"]
+
+
 def test_the_heartbeat_goes_quiet_when_something_is_broken(monkeypatch):
     """Silence is the alarm, so a failing pipeline must stop pinging rather than ping differently."""
     from fomo_agent.pipeline import health

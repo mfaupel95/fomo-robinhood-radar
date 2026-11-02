@@ -19,7 +19,7 @@ import httpx
 from .. import db
 from ..config import settings
 from ..sources.rpc import CHAIN, RobinhoodRPC
-from .collect_api import spent_this_month
+from .collect_api import FOMO_RUN_KINDS, spent_this_month
 
 log = logging.getLogger(__name__)
 
@@ -70,10 +70,15 @@ def checks(conn: sqlite3.Connection, rpc: RobinhoodRPC | None = None) -> list[di
     # A delivery that brought nothing is not a collection. Either route writes a run row whatever
     # happened — a signed-out browser, a rejected key, an exhausted month — and without the second
     # clause this check would go on reporting a healthy collection while nothing at all came in.
-    # Requiring a leaderboard in the payload is what makes the check mean what it says.
+    # Requiring a leaderboard in the payload is what makes the check mean what it says. The kinds
+    # come from the collector so a renamed run step cannot silently freeze this age at the last
+    # row of an old name, and the staleness bar follows the 24h board's 6h cadence: a check that
+    # fires half the time on a healthy collector teaches people to ignore it.
     fomo_age = _age_h(one(
-        "SELECT MAX(finished_at) FROM runs WHERE kind IN ('fomoapi', 'fomo_ingest') "
-        "AND error IS NULL AND stats_json LIKE '%\"24h\":%'"))
+        "SELECT MAX(finished_at) FROM runs "
+        f"WHERE kind IN ({','.join('?' * len(FOMO_RUN_KINDS))}) "
+        "AND error IS NULL AND stats_json LIKE '%\"24h\":%'", *FOMO_RUN_KINDS))
+    FOMO_MAX_AGE_H = 7
     month = spent_this_month(conn)
     cap = settings.fomoapi_monthly_credits
     fills_age = _age_h(one("SELECT MAX(ts) FROM trades"))
@@ -116,9 +121,9 @@ def checks(conn: sqlite3.Connection, rpc: RobinhoodRPC | None = None) -> list[di
         router_alive(conn, rpc),
         # The hint belongs on the failure only: a passing check that ends with a warning is how a
         # report trains people to skim past it.
-        {"name": "fomo collection", "ok": fomo_age is not None and fomo_age < 3,
+        {"name": "fomo collection", "ok": fomo_age is not None and fomo_age < FOMO_MAX_AGE_H,
          "detail": (f"last collection {fomo_age:.1f}h ago" if fomo_age is not None
-                    else "never collected") + ("" if fomo_age is not None and fomo_age < 3
+                    else "never collected") + ("" if fomo_age is not None and fomo_age < FOMO_MAX_AGE_H
                     else " - check `journalctl -u radar-fomo`; a rejected key and an exhausted "
                          "month both look like this")},
         # The one failure that arrives on a schedule rather than by surprise, so it is worth
