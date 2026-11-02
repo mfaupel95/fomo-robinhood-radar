@@ -937,16 +937,16 @@ def run(once: bool = typer.Option(False, "--once", help="single pass of every st
         # the fomo half over plain HTTP (fomoapi.io). It used to be reachable only through the
         # CLI, so a configured key collected nothing while the health check said "never
         # collected" - the browser path is dead (FOMO_SESSION is a 1h bearer), this one is not.
-        # Budget: a board window costs 1 credit, a page of notes 5. Running both boards AND the
-        # notes every 6h was 7 credits x 4 = 28/day (~840 a month against a 1,000 free budget).
-        # Split by how fast each thing actually changes: the 24h board every 6h (the cadence it
-        # moves at), the 7d board once a day (it barely moves), the notes once a day (they are the
-        # expensive part and the slowest). That is 4 + 1 + 5 = 10 credits/day, ~300 a month.
-        ("fomoapi_24h", 6 * 3600,
+        # Budget: a board window costs 1 credit, a page of notes 5. The free key is 1,000 a
+        # month (~33/day) and Max's rule is: use them, do not exceed them. Split by how fast each
+        # thing changes, sized to land just under the cap:
+        #   24h board every 2h = 12, 7d board every 6h = 4, notes every 8h = 3x5 = 15 -> 31/day
+        # (~930 a month). collect_api's own cap check is the backstop, not the plan.
+        ("fomoapi_24h", 2 * 3600,
          lambda c: __import__("fomo_agent.pipeline.collect_api", fromlist=["collect"]).collect(c, ("24h",), None) if settings.fomoapi_key else {"skipped": "FOMOAPI_KEY not set"}),
-        ("fomoapi_7d", 24 * 3600,
+        ("fomoapi_7d", 6 * 3600,
          lambda c: __import__("fomo_agent.pipeline.collect_api", fromlist=["collect"]).collect(c, ("7d",), None) if settings.fomoapi_key else {"skipped": "FOMOAPI_KEY not set"}),
-        ("fomoapi_theses", 24 * 3600,
+        ("fomoapi_theses", 8 * 3600,
          lambda c: __import__("fomo_agent.pipeline.collect_api", fromlist=["collect"]).collect(c, (), 1) if settings.fomoapi_key else {"skipped": "FOMOAPI_KEY not set"}),
         # free on Robinhood Chain, and it is what turns collected fomo users into trackable wallets
         ("resolve", settings.discover_interval, lambda c: rs.resolve_pending(c)),
