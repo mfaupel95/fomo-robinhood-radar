@@ -47,3 +47,5 @@ file
 --unscored
 cache/
 boards/
+# lokaler Betrieb: Prozess-Logs von deploy/windows/start-local.cmd
+logs/
