@@ -18,9 +18,14 @@ import sqlite3
 from .. import db
 from ..config import settings
 from ..sources.rpc import CHAIN, QUOTE_TOKENS, RobinhoodRPC
-from .track import TRACKED
+from .track import TRACKED_SCAN
 
 log = logging.getLogger(__name__)
+
+# How far back a dropped wallet's buys still earn a balance read. The tape shows its fills from
+# now on (track-only), so a position that opened today must be measurable - but a wallet dropped
+# months ago is not worth a request.
+DROPPED_HOLDINGS_WINDOW_S = 7 * 86400
 
 
 def stale_pairs(conn: sqlite3.Connection, limit: int | None = None,
@@ -37,11 +42,16 @@ def stale_pairs(conn: sqlite3.Connection, limit: int | None = None,
         "SELECT tr.address AS address, tr.mint AS token FROM trades tr "
         "JOIN traders t ON t.address = tr.address "
         "LEFT JOIN holdings h ON h.address = tr.address AND h.token = tr.mint "
-        f"WHERE tr.side='buy' AND tr.chain = ? AND t.status IN ({','.join('?' * len(TRACKED))}) "
+        f"WHERE tr.side='buy' AND tr.chain = ? AND t.status IN ({','.join('?' * len(TRACKED_SCAN))}) "
+        # a dropped wallet is only read while its fills are recent: its position matters because
+        # the tape now shows it (track-only), but reading all 102 forever would be a bill with no
+        # question behind it
+        "  AND (t.status <> 'dropped' OR tr.ts >= ?) "
         f"  AND tr.mint NOT IN ({quotes}) AND (h.ts IS NULL OR h.ts < ?) "
         "GROUP BY tr.address, tr.mint "
         "ORDER BY COALESCE(MAX(h.ts), 0) ASC, MAX(tr.ts) DESC LIMIT ?",
-        (CHAIN, *TRACKED, *QUOTE_TOKENS, max_age, limit or settings.holdings_per_pass),
+        (CHAIN, *TRACKED_SCAN, db.now() - DROPPED_HOLDINGS_WINDOW_S,
+         *QUOTE_TOKENS, max_age, limit or settings.holdings_per_pass),
     ).fetchall()
     return [(r["address"], r["token"]) for r in rows]
 
