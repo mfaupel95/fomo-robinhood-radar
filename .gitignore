@@ -42,3 +42,8 @@ x_client.env
 
 # Browser-Dump der fomo-Session (Privy-Bearer, 1 h TTL) - niemals ins Repo
 fomo-session.json
+scratch_*
+file
+--unscored
+cache/
+boards/

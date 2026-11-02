@@ -937,8 +937,10 @@ def run(once: bool = typer.Option(False, "--once", help="single pass of every st
         # the fomo half over plain HTTP (fomoapi.io). It used to be reachable only through the
         # CLI, so a configured key collected nothing while the health check said "never
         # collected" - the browser path is dead (FOMO_SESSION is a 1h bearer), this one is not.
-        # Two credits a pass, so it runs at the board cadence the budget was designed around.
-        ("fomoapi", 2 * 3600,
+        # Two credits a pass for the boards alone, seven with the notes: at 2h that is ~2,500
+        # credits a month against a 1,000 free budget. Six hours fits (~28/day) and is the
+        # cadence the boards themselves change at.
+        ("fomoapi", 6 * 3600,
          lambda c: __import__("fomo_agent.pipeline.collect_api", fromlist=["collect"]).collect(c, ("24h", "7d"), None) if settings.fomoapi_key else {"skipped": "FOMOAPI_KEY not set"}),
         # free on Robinhood Chain, and it is what turns collected fomo users into trackable wallets
         ("resolve", settings.discover_interval, lambda c: rs.resolve_pending(c)),
