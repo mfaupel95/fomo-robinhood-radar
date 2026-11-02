@@ -118,17 +118,25 @@ def store_theses(conn: sqlite3.Connection, rows: list[dict]) -> dict:
     return stats
 
 
+FOMO_RUN_KINDS = ("fomoapi", "fomo_ingest", "fomoapi_24h", "fomoapi_7d", "fomoapi_theses")
+
+
 def spent_this_month(conn: sqlite3.Connection, at: int | None = None) -> float:
     """Credits already spent since the first of the month, from the run log.
 
     Every pass writes what it cost into its own `runs` row, so the ledger already exists and does
     not need a second table. It resets with the calendar month because that is when the plan does.
+    The run loop split the one `fomoapi` step into per-cadence steps (24h board, 7d board,
+    theses), so every kind that spends credits has to be named here - a query pinned to the old
+    single kind kept counting yesterday's rows and under-reported the month (70 spent while the
+    passes had really burned 76).
     """
     t = time.gmtime(at or db.now())
     start = calendar.timegm((t.tm_year, t.tm_mon, 1, 0, 0, 0, 0, 0, 0))
     row = conn.execute(
         "SELECT COALESCE(SUM(json_extract(stats_json, '$.credits')), 0) FROM runs "
-        "WHERE kind = 'fomoapi' AND started_at >= ?", (start,)).fetchone()
+        f"WHERE kind IN ({','.join('?' * len(FOMO_RUN_KINDS))}) AND started_at >= ?",
+        (*FOMO_RUN_KINDS, start)).fetchone()
     return float(row[0] or 0.0)
 
 
