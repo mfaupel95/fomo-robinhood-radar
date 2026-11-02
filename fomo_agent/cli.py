@@ -937,11 +937,17 @@ def run(once: bool = typer.Option(False, "--once", help="single pass of every st
         # the fomo half over plain HTTP (fomoapi.io). It used to be reachable only through the
         # CLI, so a configured key collected nothing while the health check said "never
         # collected" - the browser path is dead (FOMO_SESSION is a 1h bearer), this one is not.
-        # Two credits a pass for the boards alone, seven with the notes: at 2h that is ~2,500
-        # credits a month against a 1,000 free budget. Six hours fits (~28/day) and is the
-        # cadence the boards themselves change at.
-        ("fomoapi", 6 * 3600,
-         lambda c: __import__("fomo_agent.pipeline.collect_api", fromlist=["collect"]).collect(c, ("24h", "7d"), None) if settings.fomoapi_key else {"skipped": "FOMOAPI_KEY not set"}),
+        # Budget: a board window costs 1 credit, a page of notes 5. Running both boards AND the
+        # notes every 6h was 7 credits x 4 = 28/day (~840 a month against a 1,000 free budget).
+        # Split by how fast each thing actually changes: the 24h board every 6h (the cadence it
+        # moves at), the 7d board once a day (it barely moves), the notes once a day (they are the
+        # expensive part and the slowest). That is 4 + 1 + 5 = 10 credits/day, ~300 a month.
+        ("fomoapi_24h", 6 * 3600,
+         lambda c: __import__("fomo_agent.pipeline.collect_api", fromlist=["collect"]).collect(c, ("24h",), None) if settings.fomoapi_key else {"skipped": "FOMOAPI_KEY not set"}),
+        ("fomoapi_7d", 24 * 3600,
+         lambda c: __import__("fomo_agent.pipeline.collect_api", fromlist=["collect"]).collect(c, ("7d",), None) if settings.fomoapi_key else {"skipped": "FOMOAPI_KEY not set"}),
+        ("fomoapi_theses", 24 * 3600,
+         lambda c: __import__("fomo_agent.pipeline.collect_api", fromlist=["collect"]).collect(c, (), 1) if settings.fomoapi_key else {"skipped": "FOMOAPI_KEY not set"}),
         # free on Robinhood Chain, and it is what turns collected fomo users into trackable wallets
         ("resolve", settings.discover_interval, lambda c: rs.resolve_pending(c)),
         ("track", settings.track_interval, lambda c: tr.track_all(c)),
