@@ -182,6 +182,21 @@ def test_the_month_is_counted_from_our_own_run_log(conn):
     assert got == 9.0, "last month's 500 and another job's 999 are both somebody else's"
 
 
+def test_a_credit_spending_step_under_any_name_counts(conn):
+    """The one `fomoapi` step became three per-cadence steps (24h board, 7d board, theses).
+
+    The budget guard kept summing the old kind alone: on 2 Nov it reported 70 credits spent for a
+    month in which the passes had really burned 76, so the cap was checked against a number that
+    only moved when a step still wrote the old name.
+    """
+    with db.tx(conn):
+        for kind, credits in (("fomoapi_24h", 6.0), ("fomoapi_7d", 6.0),
+                              ("fomoapi_theses", 5.0), ("fomoapi", 2.0)):
+            conn.execute("INSERT INTO runs(kind, started_at, stats_json) VALUES(?,?,?)",
+                         (kind, db.now() - 60, json.dumps({"credits": credits})))
+    assert spent_this_month(conn) == 19.0
+
+
 def test_a_pass_that_cannot_afford_the_notes_still_buys_the_boards(conn):
     """The cheapest thing to lose is what degrades first, rather than whichever call happened to
     come last before the 402."""

@@ -30,6 +30,7 @@ from typing import Any, Iterable
 import httpx
 
 from ..config import settings
+from ..credit_guard import reserve
 from ..models import TraderRow
 from .fomo import norm_addr
 
@@ -50,6 +51,10 @@ class OutOfCredits(FomoApiError):
     """402. Not a failure to retry — the month's budget is gone until it refills."""
 
 
+class AuthenticationError(FomoApiError):
+    """Permanent rejection; no automatic refresh or key rotation."""
+
+
 class FomoApi:
     """Thin client. Fails soft everywhere except on being out of credits, which is worth shouting."""
 
@@ -65,14 +70,15 @@ class FomoApi:
         self.credits = 0.0
 
     def _get(self, path: str, cost: float, **params) -> Any:
+        reserve(cost)
+        self.credits += cost  # retain failed and ambiguous consumption
         self.requests += 1
         r = self.http.get(path, params={k: v for k, v in params.items() if v is not None})
         if r.status_code == 402:
             raise OutOfCredits(f"{path}: monthly credits exhausted")
-        if r.status_code == 401:
-            raise FomoApiError(f"{path}: key rejected")
+        if r.status_code in (401, 403):
+            raise AuthenticationError("fomoapi authentication rejected; operator required")
         r.raise_for_status()
-        self.credits += cost
         return r.json()
 
     def leaderboard(self, window: str = "24h", limit: int = 150) -> list[TraderRow]:
