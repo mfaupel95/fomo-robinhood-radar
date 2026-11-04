@@ -28,7 +28,7 @@ def _age_h(ts: int | None) -> float | None:
     return None if not ts else (db.now() - ts) / 3600
 
 
-def router_alive(conn: sqlite3.Connection, rpc: RobinhoodRPC | None = None) -> dict:
+def router_alive(conn: sqlite3.Connection, rpc: RobinhoodRPC | None = None, *, local_only: bool = False) -> dict:
     """Fills stopped, but did the chain?
 
     `RPC_ROUTERS` is one hardcoded contract. If fomo moves to another one, every fill vanishes and
@@ -46,6 +46,9 @@ def router_alive(conn: sqlite3.Connection, rpc: RobinhoodRPC | None = None) -> d
         (CHAIN,))]
     if not wallets:
         return {"name": "router", "ok": True, "detail": "nothing tracked on this chain yet"}
+    if local_only:
+        return {"name": "router", "ok": False,
+                "detail": "no fills in a day; local closing health cannot establish chain activity"}
     try:
         rpc = rpc or RobinhoodRPC()
         head = rpc.block_number()
@@ -63,7 +66,7 @@ def router_alive(conn: sqlite3.Connection, rpc: RobinhoodRPC | None = None) -> d
                        "stale - find the new one in a recent fomo trade.")}
 
 
-def checks(conn: sqlite3.Connection, rpc: RobinhoodRPC | None = None) -> list[dict]:
+def checks(conn: sqlite3.Connection, rpc: RobinhoodRPC | None = None, *, local_only: bool = False) -> list[dict]:
     """Every check, worst first. `ok` False is something a person has to do."""
     one = lambda sql, *a: conn.execute(sql, a).fetchone()[0]  # noqa: E731
 
@@ -118,7 +121,7 @@ def checks(conn: sqlite3.Connection, rpc: RobinhoodRPC | None = None) -> list[di
     gap = max((b - a for a, b in zip(stamps, stamps[1:])), default=0) if len(stamps) > 20 else 0
 
     out = [
-        router_alive(conn, rpc),
+        router_alive(conn, rpc, local_only=True) if local_only else router_alive(conn, rpc),
         # The hint belongs on the failure only: a passing check that ends with a warning is how a
         # report trains people to skim past it.
         {"name": "fomo collection", "ok": fomo_age is not None and fomo_age < FOMO_MAX_AGE_H,
@@ -154,8 +157,8 @@ def checks(conn: sqlite3.Connection, rpc: RobinhoodRPC | None = None) -> list[di
     return sorted(out, key=lambda c: c["ok"])
 
 
-def report(conn: sqlite3.Connection, rpc: RobinhoodRPC | None = None) -> dict:
-    rows = checks(conn, rpc)
+def report(conn: sqlite3.Connection, rpc: RobinhoodRPC | None = None, *, local_only: bool = False) -> dict:
+    rows = checks(conn, rpc, local_only=local_only)
     bad = [c for c in rows if not c["ok"]]
     log.info("health: %d checks, %d failing", len(rows), len(bad))
     return {"checks": rows, "failing": len(bad), "ok": not bad}

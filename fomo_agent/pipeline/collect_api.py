@@ -137,7 +137,13 @@ def spent_this_month(conn: sqlite3.Connection, at: int | None = None) -> float:
         "SELECT COALESCE(SUM(json_extract(stats_json, '$.credits')), 0) FROM runs "
         f"WHERE kind IN ({','.join('?' * len(FOMO_RUN_KINDS))}) AND started_at >= ?",
         (*FOMO_RUN_KINDS, start)).fetchone()
-    return float(row[0] or 0.0)
+    legacy = float(row[0] or 0.0)
+    if conn.execute("SELECT 1 FROM sqlite_master WHERE name='fomo_credit_month'").fetchone():
+        ledger = conn.execute("SELECT used FROM fomo_credit_month WHERE month=?",
+                              (time.strftime('%Y-%m', t),)).fetchone()
+        if ledger:
+            return max(legacy, float(ledger[0]))
+    return legacy
 
 
 def collect(conn: sqlite3.Connection, windows: tuple[str, ...] = ("24h", "7d"),
@@ -152,7 +158,7 @@ def collect(conn: sqlite3.Connection, windows: tuple[str, ...] = ("24h", "7d"),
     is the cheapest thing to lose.
     """
     api = api or FomoApi()
-    cap = settings.fomoapi_monthly_credits if cap is None else cap
+    cap = min(1000, (settings.fomoapi_monthly_credits if cap is None else cap) or 1000)
     spent = spent_this_month(conn)
     stats: dict = {"windows": {}, "credits": 0.0, "requests": 0, "month_spent": spent}
 
