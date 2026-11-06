@@ -133,7 +133,7 @@ def recent(conn: sqlite3.Connection, chain: str | None = None, hours: int = 168,
         "SELECT s.*, COALESCE(t.symbol, s.symbol, substr(s.mint, 1, 8)) sym, "
         "  COALESCE(t.liquidity_usd, s.liquidity_usd) liq, "
         "  COALESCE(t.volume_usd, s.volume_usd) vol24, "
-        "  COALESCE(t.sellable, 1) sellable "
+        "  t.sellable sellable, t.price_at, t.created_at, t.first_seen_at "
         "FROM listing_signals s LEFT JOIN tokens t ON t.mint = s.mint "
         "WHERE s.ts >= ?" + (" AND s.chain = ?" if chain else "") + " ORDER BY s.ts DESC LIMIT ?",
         [now - hours * 3600, *([chain] if chain else []), limit],
@@ -143,6 +143,9 @@ def recent(conn: sqlite3.Connection, chain: str | None = None, hours: int = 168,
         "age_h_at_read": round((now - r["ts"]) / 3600, 1),
         "liq": r["liq"], "vol24": r["vol24"], "mcap": r["mcap_usd"],
         "volume_ratio": _ratio(r["vol24"], r["liq"]),
-        "listing_age_h": round((r["age_s"] or 0) / 3600, 1) if r["age_s"] is not None else None,
+        "listing_age_h": round((now - (r['created_at'] or r['first_seen_at'])) / 3600, 1)
+                         if r['created_at'] or r['first_seen_at'] else None,
+        "stale": r['price_at'] is None or not 0 <= now - r['price_at'] <= settings.price_max_age_s,
+        "price_at": r['price_at'],
         "sellable": r["sellable"],
     } for r in rows]

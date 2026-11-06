@@ -574,7 +574,11 @@ def pro_quote(code: str, conn: sqlite3.Connection = Depends(get_conn)) -> dict:
 @app.get("/api/health", tags=["meta"])
 def health(conn: sqlite3.Connection = Depends(get_conn)) -> dict:
     last = conn.execute("SELECT MAX(ts) FROM trades").fetchone()[0]
-    return {"ok": True, "chain": chain(), "last_fill_ts": last,
+    from .pipeline.health import report
+    result = report(conn, local_only=True)
+    # `ok` is the historical HTTP liveness contract, not data-quality clearance.
+    return {**result, "ok": True, "alive": True, "health_ok": result['ok'],
+            "chain": chain(), "last_fill_ts": last,
             "stale_seconds": (db.now() - last) if last else None}
 
 

@@ -198,16 +198,18 @@ class RobinhoodRPC:
         never as a switch. A free-tier extra answers a batch with a 500 and a log range over a
         hundred blocks with "not supported on free plan"; either is no answer, and the call goes
         back to waiting on the node rather than failing on the extra."""
-        self.limiter.wait()
+        from ..enrich_budget import current
+        budget = current.get()
+        self.limiter.wait(budget=budget) if budget else self.limiter.wait()
         self.requests += 1
         for attempt in range(4):
-            r = self.http.post(self.urls[0], json=payload)
+            r = budget.post(self.http, self.urls[0], json=payload) if budget else self.http.post(self.urls[0], json=payload)
             if r.status_code != 429:
                 r.raise_for_status()
                 return r.json()
             for alt in self.urls[1:]:
                 try:
-                    r2 = self.http.post(alt, json=payload)
+                    r2 = budget.post(self.http, alt, json=payload) if budget else self.http.post(alt, json=payload)
                 except httpx.HTTPError:
                     continue
                 if r2.status_code == 200:
@@ -215,7 +217,7 @@ class RobinhoodRPC:
                     if not self._unsupported(body):
                         self.spared += 1
                         return body
-            time.sleep(2 + 2 * attempt)
+            (budget.sleep if budget else time.sleep)(2 + 2 * attempt)
         raise RpcError("rate limited after 4 attempts")
 
     def call(self, method: str, params: list) -> object:
@@ -234,10 +236,12 @@ class RobinhoodRPC:
 
     def _post_to(self, url: str, payload: object) -> object | None:
         """One call to one endpoint, no retries: the body, or None if it did not answer."""
-        self.limiter.wait()
+        from ..enrich_budget import current
+        budget = current.get()
+        self.limiter.wait(budget=budget) if budget else self.limiter.wait()
         self.requests += 1
         try:
-            r = self.http.post(url, json=payload)
+            r = budget.post(self.http, url, json=payload) if budget else self.http.post(url, json=payload)
         except httpx.HTTPError:
             return None
         if r.status_code != 200:

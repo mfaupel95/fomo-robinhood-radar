@@ -444,6 +444,9 @@ class Settings:
     # Tokens re-quoted per pass; DexScreener takes 30 addresses per request, and the collection
     # timer fires four times an hour — enough for the whole book to stay inside the age above.
     price_refresh_limit: int = field(default_factory=lambda: _int("PRICE_REFRESH_LIMIT", 400))
+    # Cooperative enrichment bounds; the collector's independent 120s timer is unchanged.
+    enrich_budget_s: float = field(default_factory=lambda: _float("ENRICH_BUDGET_S", 90))
+    enrich_request_budget_s: float = field(default_factory=lambda: _float("ENRICH_REQUEST_BUDGET_S", 10))
     # A token stays in the re-quote queue this long after the cohort's last buy of it, unless a
     # balance or an open fomo position says somebody still holds it. Every buy ever put 6,300
     # tokens in the queue and the screener answered 429 eight hundred times a day.

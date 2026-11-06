@@ -24,6 +24,7 @@ import httpx
 from ..config import settings
 from ..models import NewToken, norm_addr
 from ..ratelimit import shared
+from ..enrich_budget import current
 from .filters import filter_tokens
 
 log = logging.getLogger(__name__)
@@ -52,7 +53,8 @@ class Busy(httpx.HTTPError):
 
 class GeckoTerminal:
     def __init__(self, client: httpx.Client | None = None, chains: Iterable[str] | None = None,
-                 feeds: Iterable[str] | None = None, patient: bool = True):
+                 feeds: Iterable[str] | None = None, patient: bool = True, budget=None):
+        self.budget = budget or current.get()
         self.http = client or httpx.Client(base_url=BASE, timeout=20 if patient else settings.gecko_impatient_timeout_s,
                                            headers={"accept": "application/json"})
         self.chains = tuple(chains) if chains else settings.dex_chains
@@ -92,6 +94,36 @@ class GeckoTerminal:
 
     def _get(self, path: str, params: dict | None = None) -> list[dict]:
         """One GET against the rate limit, backing off on 429 and giving up rather than hammering."""
+        if self.budget is not None:
+            budget = self.budget
+            if not self.patient:
+                budget.check()
+                if not self.limiter.take():
+                    raise Busy('geckoterminal allowance spent')
+                r = budget.get(self.http, path, params=params, source='geckoterminal')
+                if r.status_code == 429:
+                    raise Busy('geckoterminal 429')
+                r.raise_for_status()
+                body = r.json()
+                self.included = body.get('included') or []
+                data = body.get('data', [])
+                return data if isinstance(data, list) else [data]
+            for attempt in range(3):
+                gap = settings.gecko_min_interval_s - (time.monotonic() - self._last)
+                if gap > 0:
+                    budget.sleep(gap)
+                self.limiter.wait(budget=budget)
+                r = budget.get(self.http, path, params=params, source='geckoterminal')
+                self._last = time.monotonic()
+                if r.status_code == 429:
+                    budget.sleep(15 * (attempt + 1))
+                    continue
+                r.raise_for_status()
+                body = r.json()
+                self.included = body.get('included') or []
+                data = body.get('data', [])
+                return data if isinstance(data, list) else [data]
+            r.raise_for_status()
         if not self.patient:
             if not self.limiter.take():
                 raise Busy(f"geckoterminal: allowance spent, not waiting for {path}")
@@ -145,7 +177,12 @@ class GeckoTerminal:
                 if ids and t.pool_address is None and pools:
                     # the multi call names one pool per token and for SYNTH that was the trap; the
                     # single-token call lists them all, and the launch pool is usually among them
-                    t = self._retry_pools(t, chain, network) or t
+                    from ..enrich_budget import Deadline
+                    try:
+                        t = self._retry_pools(t, chain, network) or t
+                    except Deadline:
+                        if self.budget:
+                            self.budget.record('geckoterminal', 'pool_retry', 'deadline', chain=chain, mints=[t.mint])
                 out.append(t)
         return out
 

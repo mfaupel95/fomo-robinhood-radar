@@ -51,6 +51,8 @@ def client(tmp_path, monkeypatch):
 def test_health_reports_freshness(client):
     body = client.get("/api/health").json()
     assert body["ok"] is True and body["chain"] == "robinhood"
+    assert body['alive'] is True and body['health_ok'] is False
+    assert body['unknown'] > 0 and sum(body['counts'].values()) == len(body['checks'])
     assert body["stale_seconds"] < 3600
 
 

@@ -3,10 +3,14 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+import json
+import math
 
 from .. import db
 from ..config import settings
 from ..models import NewToken
+from ..enrich_budget import EnrichBudget, Deadline, current
+from ..ratelimit import SharedLimitUnavailable
 from ..sources.dexscreener import DexScreener, parse_pair
 from ..sources.filters import filter_tokens
 from ..sources.fomo import norm_addr
@@ -125,6 +129,10 @@ def lookup_tokens(chain: str, mints: list[str], dex: DexScreener | None = None,
             found[t.mint] = t
         requests += (len(mints) + 29) // 30
     except Exception as e:  # noqa: BLE001 - enrichment is optional, and one source down is not fatal
+        if isinstance(e, (Deadline, SharedLimitUnavailable)):
+            raise
+        if current.get():
+            current.get().record('geckoterminal', 'lookup', 'failure', chain=chain, mints=mints, error_type=type(e).__name__)
         log.warning("geckoterminal lookup failed for %s: %s", chain, e)
 
     missing = [m for m in mints if m not in found]
@@ -137,11 +145,52 @@ def lookup_tokens(chain: str, mints: list[str], dex: DexScreener | None = None,
                 if t and t.mint not in found:
                     found[t.mint] = t
         except Exception as e:  # noqa: BLE001
+            if isinstance(e, SharedLimitUnavailable):
+                raise
+            if isinstance(e, Deadline):
+                if not found:
+                    raise
+                current.get().record('dexscreener', 'lookup', 'deadline', chain=chain, mints=missing)
+                return list(found.values()), requests
+            if current.get():
+                current.get().record('dexscreener', 'lookup', 'failure', chain=chain, mints=missing, error_type=type(e).__name__)
             log.warning("dexscreener lookup failed for %s: %s", chain, e)
     return list(found.values()), requests
 
 
-def enrich_tokens(conn: sqlite3.Connection, dex: DexScreener | None = None, limit: int = 300) -> dict:
+def enrich_tokens(conn: sqlite3.Connection, dex: DexScreener | None = None, limit: int = 300,
+                  budget_s: float | None = None) -> dict:
+    """One bounded pass, with crash-surviving diagnostics in the existing runs table."""
+    rid = db.run_start(conn, 'enrich_diagnostic')
+    stats: dict = {'looked_up': 0, 'named': 0, 'priced': 0, 'requests': 0, 'dated': 0}
+    budget = EnrichBudget(settings.enrich_budget_s if budget_s is None else budget_s)
+    def persist():
+        conn.execute('UPDATE runs SET stats_json=? WHERE id=?',
+                     (json.dumps({**stats, **budget.snapshot()}), rid))
+        conn.commit()
+    budget.persist = persist
+    token = current.set(budget)
+    try:
+        persist()
+        _enrich_tokens(conn, dex, limit, stats)
+        budget.check()
+    except Deadline:
+        stats['stopped'] = 'deadline'
+        budget.record('enrich', 'batch', 'deadline')
+    except Exception as exc:
+        stats['stopped'] = 'failure'
+        budget.record('enrich', 'batch', 'failure', error_type=type(exc).__name__)
+        raise
+    finally:
+        current.reset(token)
+        stats.update(budget.snapshot())
+        stats['requests'] = stats['attempts']
+        stats['errors'] = stats['failures']
+        db.run_finish(conn, rid, stats, stats.get('stopped'))
+    return stats
+
+
+def _enrich_tokens(conn: sqlite3.Connection, dex, limit, stats) -> dict:
     """Name the tokens we only know by address, and re-quote the ones somebody is holding.
 
     Positions and fills both arrive as bare contract addresses, and an open position that cannot be
@@ -161,29 +210,49 @@ def enrich_tokens(conn: sqlite3.Connection, dex: DexScreener | None = None, limi
     for r in stale_price_tokens(conn):
         by_chain.setdefault(r["chain"], []).append(r["token"])
 
-    stats = {"looked_up": len(rows), "named": 0, "priced": 0, "requests": 0}
-    now = db.now()
-    for chain, mints in by_chain.items():
-        mints = sorted(set(mints))
+    stats['looked_up'] = len(rows)
+    budget = current.get()
+    batches = [(chain, mints[i:i+30]) for chain, values in by_chain.items()
+               for mints in [sorted(set(values))] for i in range(0, len(mints), 30)]
+    stats['stale'] = []
+    for chain, mints in batches:
+        for mint in mints:
+            row = conn.execute('SELECT price_at FROM tokens WHERE mint=? AND chain=?', (mint, chain)).fetchone()
+            if not row or row['price_at'] is None or row['price_at'] < db.now()-settings.price_max_age_s:
+                stats['stale'].append({'chain': chain, 'mint': mint, 'price_at': row['price_at'] if row else None, 'stale': True})
+    for chain, mints in batches:
+        budget.check()
+        budget.record('enrich', 'batch', 'attempt', chain=chain, mints=mints)
         tokens, requests = lookup_tokens(chain, mints, dex=dex)
+        now = db.now()
         stats["requests"] += requests
         with db.tx(conn):
             for t in tokens:
+                if t.chain != chain or t.mint not in mints:
+                    continue
+                valid_price = t.price_usd is not None and math.isfinite(t.price_usd) and t.price_usd > 0
                 db.upsert_token(conn, t.mint, chain=t.chain, symbol=t.symbol, mcap_usd=t.mcap_usd,
                                 liquidity_usd=t.liquidity_usd, volume_usd=t.volume_usd,
                                 created_at=t.created_at,
-                                decimals=t.decimals, price_usd=t.price_usd,
+                                decimals=t.decimals, price_usd=t.price_usd if valid_price else None,
                                 pool_address=t.pool_address,
-                                price_at=now if t.price_usd is not None else None,
+                                price_at=now if valid_price else None,
                                 checked_at=now)
                 stats["named"] += 1
-                stats["priced"] += t.price_usd is not None
+                stats["priced"] += valid_price
             # An address nobody could answer for is stamped too, so it goes to the back of the
             # queue instead of being re-requested every pass for the rest of the project.
             answered = {t.mint for t in tokens}
             for mint in mints:
                 if mint not in answered:
                     db.upsert_token(conn, mint, chain=chain, checked_at=now)
+        for mint in mints:
+            row = conn.execute('SELECT price_usd, price_at FROM tokens WHERE mint=? AND chain=?', (mint, chain)).fetchone()
+            stats['stale'] = [r for r in stats['stale'] if (r['chain'], r['mint']) != (chain, mint)]
+            if row and (row['price_at'] is None or row['price_at'] < now-settings.price_max_age_s):
+                stats['stale'].append({'chain': chain, 'mint': mint, 'price_at': row['price_at'], 'stale': True})
+        budget.record('enrich', 'batch', 'success', chain=chain, mints=mints, priced=stats['priced'])
+        budget.check()
     # Third pass: when each pool opened. Only the pool endpoint carries it, so a token found on
     # our own tape arrives undated however well it is priced — and the fresh feed is ranked on
     # exactly that number. Cheap and permanent: thirty pools a request, and a token dated once is
@@ -199,8 +268,11 @@ def enrich_tokens(conn: sqlite3.Connection, dex: DexScreener | None = None, limi
             by_chain_pools.setdefault(r["chain"], {})[norm_addr(r["pool"])] = r["token"]
         for chain, pools in by_chain_pools.items():
             try:
+                budget.check()
                 ages = gt.pool_ages(chain, list(pools))
             except Exception as e:  # noqa: BLE001 - one dead source must not stop the pass
+                if isinstance(e, (Deadline, SharedLimitUnavailable)):
+                    raise
                 log.warning("pool ages on %s failed: %s", chain, e)
                 continue
             stats["requests"] += 1
@@ -214,9 +286,12 @@ def enrich_tokens(conn: sqlite3.Connection, dex: DexScreener | None = None, limi
     # Fourth pass: can they be sold. The tokens the cohort touched today, a dozen a pass, the
     # stale ones first. A verdict of no is final and is not asked again.
     try:
+        budget.check()
         from .safety import sweep
-        stats["sell_check"] = sweep(conn, limit=settings.sell_check_per_pass)
+        stats["sell_check"] = sweep(conn, limit=settings.sell_check_per_pass, notify=False)
     except Exception as e:  # noqa: BLE001 - the check is a guard, not the pass
+        if isinstance(e, (Deadline, SharedLimitUnavailable)):
+            raise
         log.warning("sell check sweep failed: %s", e)
 
     log.info("token enrichment: %s", stats)

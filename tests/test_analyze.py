@@ -437,7 +437,7 @@ def test_a_moved_router_is_told_apart_from_a_quiet_market(conn):
         def block_number(self):
             raise RuntimeError("endpoint down")
 
-    assert router_alive(conn, Broken([]))["ok"], "a check that cannot run must not cry wolf"
+    assert router_alive(conn, Broken([]))["ok"] is None, "a check that cannot run is UNKNOWN"
 
 
 def test_health_puts_the_failures_first(conn):
@@ -446,9 +446,9 @@ def test_health_puts_the_failures_first(conn):
     r = report(conn, rpc=None)
     names = [c["name"] for c in r["checks"]]
     assert "fomo collection" in names and "on-chain tape" in names
-    oks = [c["ok"] for c in r["checks"]]
+    oks = [{'BAD':0, 'UNKNOWN':1, 'OK':2}[c['status']] for c in r['checks']]
     assert oks == sorted(oks), "worst first, so the first line is the one that matters"
-    assert r["failing"] == sum(1 for c in r["checks"] if not c["ok"])
+    assert r["failing"] == sum(1 for c in r["checks"] if c["ok"] is False)
 
 
 # ---------------------------------------------------------------- exits
