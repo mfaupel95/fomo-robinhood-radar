@@ -17,6 +17,7 @@ import httpx
 
 from ..config import settings
 from ..models import NewToken, norm_addr
+from ..enrich_budget import current
 from .filters import filter_tokens
 
 BASE = "https://api.dexscreener.com"
@@ -30,7 +31,8 @@ class DexScreener:
         self.chains = tuple(chains) if chains else settings.dex_chains
 
     def _get(self, path: str) -> list | dict:
-        r = self.http.get(path)
+        budget = current.get()
+        r = budget.get(self.http, path, source='dexscreener') if budget else self.http.get(path)
         r.raise_for_status()
         return r.json()
 

@@ -59,14 +59,14 @@ class RateLimiter:
             self.total += 1
             return True
 
-    def wait(self) -> None:
+    def wait(self, budget=None) -> None:
         with self._lock:
             now = time.monotonic()
             self._trim(now)
             if len(self.calls) >= self.max:
                 sleep = 60 - (now - self.calls[0]) + 0.05
                 log.info("%s rate limit: sleeping %.1fs", self.name, sleep)
-                time.sleep(max(sleep, 0))
+                (budget.sleep if budget else time.sleep)(max(sleep, 0))
             self.calls.append(time.monotonic())
             self.total += 1
 
@@ -152,10 +152,12 @@ class SharedRateLimiter(RateLimiter):
                     self._fallback(e)
         return super().take()
 
-    def wait(self) -> None:
+    def wait(self, budget=None) -> None:
         if not self._broken:
             with self._lock:
                 while True:
+                    if budget:
+                        budget.check()
                     try:
                         claimed, sleep = self._claim(max(0, self.max - self.reserve), self.min_gap_s)
                     except sqlite3.Error as e:
@@ -165,8 +167,8 @@ class SharedRateLimiter(RateLimiter):
                         return
                     if sleep > 5:
                         log.info("%s rate limit (shared): sleeping %.1fs", self.name, sleep)
-                    time.sleep(sleep)
-        super().wait()
+                    (budget.sleep if budget else time.sleep)(sleep)
+        super().wait(budget=budget)
 
 
 def shared(max_per_min: int, name: str, reserve: int = 0, min_gap_s: float = 0.0) -> RateLimiter:
