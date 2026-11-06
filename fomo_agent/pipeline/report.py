@@ -56,7 +56,7 @@ def _listings_section(conn: sqlite3.Connection, hours: int = 168) -> list[str]:
     from .listings import recent
 
     rows = recent(conn, hours=hours, limit=15)
-    out = ["## Liquid listings (depth >= $1M, 24h volume >= depth, no roster fill)\n"]
+    out = ["## Historical listing signals (not currently requalified candidates)\n"]
     if not rows:
         out.append("_none in the window_\n")
         return out
@@ -64,7 +64,8 @@ def _listings_section(conn: sqlite3.Connection, hours: int = 168) -> list[str]:
         ratio = f"{r['volume_ratio']:.2f}x" if r["volume_ratio"] is not None else "-"
         out.append(f"- `{r['mint']}` {r['sym'] or ''} [{r['chain'] or 'solana'}]: "
                    f"depth {_usd(r['liq'])}, 24h {_usd(r['vol24'])} ({ratio}), "
-                   f"mcap {_usd(r['mcap'])}, seen {r['age_h_at_read']:.1f}h ago")
+                   f"mcap {_usd(r['mcap'])}, seen {r['age_h_at_read']:.1f}h ago; "
+                   f"{'STALE' if r['stale'] else 'nominal mark only'}, listing age {r['listing_age_h']}h")
     out.append("")
     return out
 
@@ -73,6 +74,8 @@ def build_report(conn: sqlite3.Connection, hours: int = 24) -> str:
     now = db.now()
     since = now - hours * 3600
     out = [f"# FOMO Robinhood Radar — {datetime.now(timezone.utc):%Y-%m-%d %H:%M} UTC\n"]
+    from .data_quality import text
+    out.append(text(conn) + '\n')
 
     counts = conn.execute("SELECT status, COUNT(*) c FROM traders GROUP BY status").fetchall()
     out.append("**Traders:** " + ", ".join(f"{r['status']}={r['c']}" for r in counts) + "\n")

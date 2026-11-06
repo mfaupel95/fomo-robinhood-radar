@@ -97,7 +97,8 @@ def worker_locked(kind, rid):
     c = db.connect()
     try:
         stats = build_steps()[kind][1](c)
-        if kind == 'health' and not stats.get('ok'):
+        if kind == 'health' and (stats.get('failing', 0) or
+                                 (not stats.get('ok') and stats.get('status') != 'UNKNOWN')):
             db.run_finish(c, rid, stats, 'health'); return 1
         if stats.get('budget_stop') or stats.get('out_of_credits'): raise BudgetBlocked('budget blocked')
         if stats.get('error') or stats.get('errors') or stats.get('skipped') or 'stopped' in stats:
@@ -174,7 +175,13 @@ def _run_due(c, kinds, step_timeout, deadline, runner):
             print(f'{kind}: failed ({reason})'); failed = True
         else:
             c.execute('DELETE FROM sammler_recovery WHERE kind=?', (kind,)); c.commit()
-            print(f'{kind}: success run={rid}')
+            if diagnostic:
+                import json
+                payload = c.execute('SELECT stats_json FROM runs WHERE id=?', (rid,)).fetchone()[0]
+                status = json.loads(payload or '{}').get('status', 'OK')
+                print(f'{kind}: {status} run={rid} (diagnostic only; no recovery retry)')
+            else:
+                print(f'{kind}: success run={rid}')
     return int(failed)
 
 def main():

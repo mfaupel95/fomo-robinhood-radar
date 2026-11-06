@@ -377,8 +377,8 @@ def fmt_launch(t: dict, now: int | None = None) -> str:
 
 def fmt_health(r: dict) -> str:
     """The state of the machine, worst first. Sent daily and on demand."""
-    mark = {True: "\u00b7", False: "\u25c6"}
-    head = "<b>ALL CLEAR</b>" if r["ok"] else f"<b>{r['failing']} THINGS NEED A LOOK</b>"
+    mark = {True: "\u00b7", False: "\u25c6", None: "UNKNOWN"}
+    head = "<b>ALL CLEAR</b>" if r["ok"] else f"<b>{r['failing']} BAD / {r.get('unknown', 0)} UNKNOWN</b>"
     out = [head, ""]
     for c in r["checks"]:
         line = f"{mark[c['ok']]} <b>{esc(c['name'])}</b> \u2014 {esc(c['detail'])}"

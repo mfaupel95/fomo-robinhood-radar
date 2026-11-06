@@ -45,9 +45,9 @@ def router_alive(conn: sqlite3.Connection, rpc: RobinhoodRPC | None = None, *, l
         "SELECT address FROM traders WHERE chain = ? AND status IN ('active','watch') LIMIT 60",
         (CHAIN,))]
     if not wallets:
-        return {"name": "router", "ok": True, "detail": "nothing tracked on this chain yet"}
+        return {"name": "router", "ok": None, "detail": "nothing tracked on this chain yet; coverage unknown"}
     if local_only:
-        return {"name": "router", "ok": False,
+        return {"name": "router", "ok": None,
                 "detail": "no fills in a day; local closing health cannot establish chain activity"}
     try:
         rpc = rpc or RobinhoodRPC()
@@ -55,7 +55,7 @@ def router_alive(conn: sqlite3.Connection, rpc: RobinhoodRPC | None = None, *, l
         moved = rpc.transfers(wallets, max(head - settings.rpc_window_blocks, 0), head,
                               outgoing=False)
     except Exception as e:  # noqa: BLE001 - a check that cannot run is not a failing check
-        return {"name": "router", "ok": True, "detail": f"could not ask the chain: {e}"}
+        return {"name": "router", "ok": None, "detail": f"could not ask the chain: {type(e).__name__}"}
 
     if not moved:
         return {"name": "router", "ok": True,
@@ -154,14 +154,28 @@ def checks(conn: sqlite3.Connection, rpc: RobinhoodRPC | None = None, *, local_o
          "detail": f"{unresolved} fomo users still without an on-chain address, "
                    f"{resolvable} of them with swaps to try, {unresolved - resolvable} with none"},
     ]
-    return sorted(out, key=lambda c: c["ok"])
+    for row in out:
+        if row['name'] == 'watcher gaps' and (len(stamps) <= 20 or gap < 900):
+            row['ok'] = None
+            row['detail'] += ' - global scan coverage UNKNOWN; tape alone is not scan evidence'
+        if row['name'] == 'collect scans' and (not track or lost / len(track) <= 0.3):
+            row['ok'] = None
+            row['detail'] += ' - global block/window/roster coverage not recorded'
+        if row['name'] == 'wallet resolution' and unresolved:
+            row['ok'] = None
+        row['status'] = 'UNKNOWN' if row['ok'] is None else 'OK' if row['ok'] else 'BAD'
+    return sorted(out, key=lambda c: {'BAD': 0, 'UNKNOWN': 1, 'OK': 2}[c['status']])
 
 
 def report(conn: sqlite3.Connection, rpc: RobinhoodRPC | None = None, *, local_only: bool = False) -> dict:
     rows = checks(conn, rpc, local_only=local_only)
-    bad = [c for c in rows if not c["ok"]]
+    counts = {s: sum(c.get('status', 'OK' if c['ok'] else 'BAD') == s for c in rows)
+              for s in ('OK', 'BAD', 'UNKNOWN')}
+    bad = [c for c in rows if c['ok'] is False]
     log.info("health: %d checks, %d failing", len(rows), len(bad))
-    return {"checks": rows, "failing": len(bad), "ok": not bad}
+    return {"checks": rows, "failing": len(bad), "unknown": counts['UNKNOWN'],
+            "counts": counts, "status": 'BAD' if bad else 'UNKNOWN' if counts['UNKNOWN'] else 'OK',
+            "ok": not bad and not counts['UNKNOWN']}
 
 
 def heartbeat(ok: bool, url: str | None = None, timeout: float = 8.0) -> str:

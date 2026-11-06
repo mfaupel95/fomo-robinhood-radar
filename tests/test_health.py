@@ -35,4 +35,4 @@ def test_a_quiet_healthy_day_raises_nothing_new(tmp_path, monkeypatch):
     conn = db.connect(tmp_path / "q.db")
     monkeypatch.setattr(health, "router_alive", lambda conn, rpc=None: {"name": "router", "ok": True, "detail": "x"})
     rows = names(health.checks(conn))
-    assert rows["collect scans"]["ok"] and rows["watcher gaps"]["ok"]
+    assert rows["collect scans"]["status"] == rows["watcher gaps"]["status"] == 'UNKNOWN'

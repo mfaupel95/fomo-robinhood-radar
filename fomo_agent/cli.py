@@ -318,7 +318,7 @@ def health_cmd(
         r = report(conn)
         if not (quiet and r["ok"]):
             for c in r["checks"]:
-                typer.echo(f"{'ok ' if c['ok'] else 'BAD'}  {c['name']:<20} {c['detail']}")
+                typer.echo(f"{c.get('status', 'OK' if c['ok'] else 'BAD')}  {c['name']:<20} {c['detail']}")
         if beat:
             msg = heartbeat(r["ok"])
             if not quiet or not r["ok"]:
@@ -337,7 +337,7 @@ def health_cmd(
             typer.echo(f"pushed to {sent} subscribers")
     finally:
         conn.close()
-    raise typer.Exit(0 if r["ok"] else 1)
+    raise typer.Exit(1 if r['failing'] else 2 if r.get('unknown', 0) else 0)
 
 
 @app.command("fomo-api")
