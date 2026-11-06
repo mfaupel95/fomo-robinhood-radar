@@ -72,6 +72,8 @@ def failure_state(c, kind, reason, now):
 
 def classify(e):
     import httpx
+    from .ratelimit import SharedLimitUnavailable
+    if isinstance(e, SharedLimitUnavailable): return 'transient'
     if isinstance(e, AuthenticationError): return 'auth'
     if isinstance(e, (BudgetBlocked, OutOfCredits)): return 'budget'
     if isinstance(e, (httpx.TimeoutException, httpx.TransportError)): return 'transient'

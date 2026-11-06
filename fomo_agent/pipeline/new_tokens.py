@@ -10,6 +10,7 @@ from .. import db
 from ..config import settings
 from ..models import NewToken
 from ..enrich_budget import EnrichBudget, Deadline, current
+from ..ratelimit import SharedLimitUnavailable
 from ..sources.dexscreener import DexScreener, parse_pair
 from ..sources.filters import filter_tokens
 from ..sources.fomo import norm_addr
@@ -128,7 +129,7 @@ def lookup_tokens(chain: str, mints: list[str], dex: DexScreener | None = None,
             found[t.mint] = t
         requests += (len(mints) + 29) // 30
     except Exception as e:  # noqa: BLE001 - enrichment is optional, and one source down is not fatal
-        if isinstance(e, Deadline):
+        if isinstance(e, (Deadline, SharedLimitUnavailable)):
             raise
         if current.get():
             current.get().record('geckoterminal', 'lookup', 'failure', chain=chain, mints=mints, error_type=type(e).__name__)
@@ -144,6 +145,8 @@ def lookup_tokens(chain: str, mints: list[str], dex: DexScreener | None = None,
                 if t and t.mint not in found:
                     found[t.mint] = t
         except Exception as e:  # noqa: BLE001
+            if isinstance(e, SharedLimitUnavailable):
+                raise
             if isinstance(e, Deadline):
                 if not found:
                     raise
@@ -268,7 +271,7 @@ def _enrich_tokens(conn: sqlite3.Connection, dex, limit, stats) -> dict:
                 budget.check()
                 ages = gt.pool_ages(chain, list(pools))
             except Exception as e:  # noqa: BLE001 - one dead source must not stop the pass
-                if isinstance(e, Deadline):
+                if isinstance(e, (Deadline, SharedLimitUnavailable)):
                     raise
                 log.warning("pool ages on %s failed: %s", chain, e)
                 continue
@@ -285,9 +288,9 @@ def _enrich_tokens(conn: sqlite3.Connection, dex, limit, stats) -> dict:
     try:
         budget.check()
         from .safety import sweep
-        stats["sell_check"] = sweep(conn, limit=settings.sell_check_per_pass)
+        stats["sell_check"] = sweep(conn, limit=settings.sell_check_per_pass, notify=False)
     except Exception as e:  # noqa: BLE001 - the check is a guard, not the pass
-        if isinstance(e, Deadline):
+        if isinstance(e, (Deadline, SharedLimitUnavailable)):
             raise
         log.warning("sell check sweep failed: %s", e)
 

@@ -28,6 +28,8 @@ import time
 
 from .. import db
 from ..config import settings
+from ..enrich_budget import current
+from ..ratelimit import SharedLimitUnavailable
 from ..sources.rpc import BALANCE_SELECTOR, RobinhoodRPC, RpcError, topic_for
 
 log = logging.getLogger(__name__)
@@ -118,6 +120,8 @@ def pool_silence(gt, chain: str, pool: str, now: int) -> tuple[str, str] | None:
     try:
         a = gt.pool(chain, pool)
     except Exception as e:  # noqa: BLE001 - a screener that is busy is not a verdict
+        if isinstance(e, SharedLimitUnavailable):
+            raise
         log.debug("pool lookup for %s failed: %s", pool, e)
         return None
     if not a:
@@ -146,7 +150,7 @@ def silence_wait_s(buys: int) -> int:
 
 
 def check(conn: sqlite3.Connection, mint: str, rpc: RobinhoodRPC | None = None, gt=None,
-          now: int | None = None, max_age_s: int = 600, force: bool = False) -> dict:
+          now: int | None = None, max_age_s: int = 600, force: bool = False, *, notify: bool = True) -> dict:
     """The verdict for one token, from storage if recent enough, else asked again and stored.
 
     Returns {"sellable": 1|0|None, "note": str, "checked_at": int, "asked": bool}.
@@ -195,6 +199,8 @@ def check(conn: sqlite3.Connection, mint: str, rpc: RobinhoodRPC | None = None, 
                 from ..sources.geckoterminal import GeckoTerminal
                 gt = GeckoTerminal(patient=False)
             witness = pool_silence(gt, chain, row["pool_address"] or "", now)
+        except SharedLimitUnavailable:
+            raise
         except Exception:  # noqa: BLE001
             witness = None
         if witness:
@@ -211,7 +217,8 @@ def check(conn: sqlite3.Connection, mint: str, rpc: RobinhoodRPC | None = None, 
         conn.execute("UPDATE tokens SET sellable=?, sell_checked_at=?, sell_note=? WHERE mint=?", (verdict, now, note, mint))
     if verdict == 0:
         log.warning("unsellable: %s - %s", mint, note)
-        if row["sellable"] != 0:
+        # Enrichment persists safety findings, but never dispatches notifications.
+        if row["sellable"] != 0 and notify and current.get() is None:
             try:
                 void_pushes(conn, mint, note, now)
             except Exception as e:  # noqa: BLE001 - the verdict stands whether or not the word got out
@@ -437,7 +444,7 @@ def only_the_cohort(conn: sqlite3.Connection, mint: str, wallets: int, now: int 
     return None
 
 
-def sweep(conn: sqlite3.Connection, limit: int = 12, now: int | None = None, rpc=None, gt=None) -> dict:
+def sweep(conn: sqlite3.Connection, limit: int = 12, now: int | None = None, rpc=None, gt=None, *, notify: bool = True) -> dict:
     """Ask again about the tokens the cohort touched today whose verdict is missing or stale.
 
     Bounded per pass, longest-unasked first, so the cost stays flat: a dozen eth_calls and at most
@@ -455,7 +462,7 @@ def sweep(conn: sqlite3.Connection, limit: int = 12, now: int | None = None, rpc
         (now - 86400, f"%{SILENCE}%", now - 1800, limit)).fetchall()
     stats = {"asked": 0, "unsellable": 0, "sellable": 0, "unknown": 0}
     for r in rows:
-        v = check(conn, r["mint"], rpc=rpc, gt=gt, now=now, force=True)
+        v = check(conn, r["mint"], rpc=rpc, gt=gt, now=now, force=True, notify=notify)
         stats["asked"] += 1
         stats["unsellable" if v["sellable"] == 0 else "sellable" if v["sellable"] == 1 else "unknown"] += 1
         time.sleep(0.2)

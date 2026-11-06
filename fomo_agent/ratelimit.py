@@ -18,6 +18,12 @@ from collections import deque
 from pathlib import Path
 
 log = logging.getLogger(__name__)
+
+
+class SharedLimitUnavailable(RuntimeError):
+    """No shared reservation: guarded callers must not issue a request."""
+
+
 # the process, for the shared ledger: the CLI verb it runs (serve, watch, bot, enrich-tokens...),
 # or a script's own name (crowd_share, daily_report); a bare "30" was the --days argument
 _argv = sys.argv if sys.argv else [""]
@@ -75,8 +81,8 @@ class SharedRateLimiter(RateLimiter):
     """The window in a file, one row per call, so that every process sees every other's calls.
 
     A claim is one short write transaction; a wait sleeps outside it. If the file cannot be used
-    (a read-only disk, a locked path) the limiter falls back to counting on its own, which is
-    what it did before, and says so once.
+    (a read-only disk, a locked path), legacy unguarded callers still count locally and log it.
+    Guarded enrichment instead fails closed, including an instance previously marked broken.
     """
 
     def __init__(self, max_per_min: int, name: str, path: Path | str, reserve: int = 0, min_gap_s: float = 0.0):
@@ -131,7 +137,17 @@ class SharedRateLimiter(RateLimiter):
             log.warning("%s: shared limit at %s unusable (%s); counting in this process only", self.name, self.path, e)
             self._broken = True
 
+    def _guard_failure(self, e, budget):
+        log.warning('%s: shared reservation unavailable; fail closed (%s)', self.name, type(e).__name__)
+        budget.record(self.name, 'shared_claim', 'failure', error_type=type(e).__name__,
+                      classification='transient', retry_policy='collector_backoff',
+                      shared_reservation=False)
+        raise SharedLimitUnavailable(f'{self.name}: shared reservation unavailable') from e
+
     def room(self) -> bool:
+        from .enrich_budget import current
+        if current.get() is not None:
+            return False  # guarded callers must reserve, not use a racy preflight
         if not self._broken:
             with self._lock:
                 try:
@@ -144,6 +160,15 @@ class SharedRateLimiter(RateLimiter):
         return super().room()
 
     def take(self) -> bool:
+        from .enrich_budget import current
+        budget = current.get()
+        if budget is not None:
+            with self._lock:
+                budget.check()
+                try:
+                    return self._claim(max(0, self.max - self.reserve), self.min_gap_s)[0]
+                except sqlite3.Error as e:
+                    self._guard_failure(e, budget)
         if not self._broken:
             with self._lock:
                 try:
@@ -153,7 +178,9 @@ class SharedRateLimiter(RateLimiter):
         return super().take()
 
     def wait(self, budget=None) -> None:
-        if not self._broken:
+        from .enrich_budget import current
+        budget = budget if budget is not None else current.get()
+        if budget is not None or not self._broken:
             with self._lock:
                 while True:
                     if budget:
@@ -161,6 +188,8 @@ class SharedRateLimiter(RateLimiter):
                     try:
                         claimed, sleep = self._claim(max(0, self.max - self.reserve), self.min_gap_s)
                     except sqlite3.Error as e:
+                        if budget is not None:
+                            self._guard_failure(e, budget)
                         self._fallback(e)
                         break
                     if claimed:
