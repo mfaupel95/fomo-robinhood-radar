@@ -70,17 +70,18 @@ def test_each_position_says_why_it_is_paper(tmp_path):
     assert p["positions"][0]["kind"] == "realizable", "realizable first, whatever its size"
 
 
-def test_the_report_leads_with_the_realizable_figure_and_marks_the_paper(tmp_path):
+def test_the_report_labels_sell_checked_values_as_nominal_and_marks_the_paper(tmp_path):
     conn = db.connect(tmp_path / "pnl.db")
     now = db.now()
     seed(conn, now)
     md = build_report(conn)
-    pnl = md.index("## PnL")
-    real = md.index("realizable")
+    pnl = md.index("## Nominal open-position marks")
+    real = md.index("nominal, sell-check-passed")
     unchecked = md.index("not counted")
     paper = md.index("paper, not PnL")
-    assert pnl < real < unchecked < paper, "realizable first, every other figure after it"
-    assert "$1.0k realizable" in md and "$4.5k" in md and "$600" in md
+    assert pnl < real < unchecked < paper, "legacy bucket order remains unchanged"
+    assert "$1.0k nominal, sell-check-passed" in md and "$4.5k" in md and "$600" in md
+    assert "NEVER executable proceeds" in md
     assert "never the headline" in md
 
 

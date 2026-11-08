@@ -24,21 +24,18 @@ def _usd(v) -> str:
 
 
 def _pnl_section(conn: sqlite3.Connection, hours: int = 72) -> list[str]:
-    """The PnL, in the order it may be quoted: realizable first, paper as a footnote.
-
-    A mark nobody can sell into is not a PnL, and stating it first taught the reader the wrong
-    number twice (PEAT/OYSTERS/TENDIES read +$4.1k of paper profit while `sell-check` said the
-    transfer to the router could not clear).
-    """
+    """Label legacy sell-check buckets as nominal, not executable quotes."""
     from .analyze import cohort_pnl
 
     p = cohort_pnl(conn, hours=hours)
     real, paper, unchecked = p["realizable"], p["paper"], p["unchecked"]
-    out = [f"## PnL (official figure: realizable, tape entries of the last {hours}h)\n"]
+    out = [f"## Nominal open-position marks (tape entries of the last {hours}h)\n",
+           "All buckets are nominal marks, NEVER executable proceeds; balance/price freshness, "
+           "size, slippage, fees and exit are not established by sellable=1.\n"]
     if not p["positions"]:
         out.append("_no open positions in the window_\n")
         return out
-    out.append(f"- **{_usd(real['pnl'])} realizable** on {_usd(real['cost'])} cost "
+    out.append(f"- **{_usd(real['pnl'])} nominal, sell-check-passed** on {_usd(real['cost'])} cost "
                f"({real['positions']} of {len(p['positions'])} positions passed the sell check)\n")
     if unchecked["positions"]:
         out.append(f"- _not counted: {_usd(unchecked['pnl'])} on {_usd(unchecked['cost'])} "
@@ -80,8 +77,7 @@ def build_report(conn: sqlite3.Connection, hours: int = 24) -> str:
     counts = conn.execute("SELECT status, COUNT(*) c FROM traders GROUP BY status").fetchall()
     out.append("**Traders:** " + ", ".join(f"{r['status']}={r['c']}" for r in counts) + "\n")
 
-    # The two numbers a reader quotes first: what the cohort could actually take out, and which
-    # pools have real money in them without a single wallet of ours. Everything below is detail.
+    # Historical sell checks and pool marks do not establish executable exit proceeds.
     out.extend(_pnl_section(conn))
     out.extend(_listings_section(conn))
 
