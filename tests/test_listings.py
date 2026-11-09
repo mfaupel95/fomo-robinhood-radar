@@ -91,6 +91,36 @@ def test_one_roster_fill_hands_the_token_back_to_the_cohort_rule(tmp_path):
                                                     min_volume_ratio=0.6)] == [PONS, CLAUDE_A]
 
 
+@pytest.mark.parametrize("kind", ["trade", None])
+def test_roster_filter_precedes_candidate_limit(tmp_path, kind):
+    """A high-turnover cohort token must not consume a new-listing result slot."""
+    conn = db.connect(tmp_path / "limited.db")
+    now = db.now()
+    seed(conn, now, MEASURED)
+    with db.tx(conn):
+        db.upsert_trader(conn, WALLET, chain="robinhood", score=70, status="watch")
+        db.insert_trade(conn, sig="cohort", address=WALLET, chain="robinhood",
+                        mint=CLAUDE_B, side="buy", usd_value=500.0,
+                        token_amount=10.0, ts=now - 60, source="rpc")
+        conn.execute("UPDATE trades SET kind=? WHERE sig='cohort'", (kind,))
+    got = listings.candidates(conn, "robinhood", now=now, min_volume_ratio=0.6, limit=1)
+    assert [c["mint"] for c in got] == [PONS]
+    assert got[0]["roster_fills"] == 0
+
+
+def test_non_trade_rows_do_not_consume_listing_eligibility(tmp_path):
+    conn = db.connect(tmp_path / "dust.db")
+    now = db.now()
+    seed(conn, now, MEASURED)
+    with db.tx(conn):
+        db.insert_trade(conn, sig="dust", address=WALLET, chain="robinhood",
+                        mint=CLAUDE_B, side="buy", usd_value=0.01,
+                        token_amount=10.0, ts=now - 60, source="rpc", kind="dust")
+    got = listings.candidates(conn, "robinhood", now=now, min_volume_ratio=0.6, limit=1)
+    assert [c["mint"] for c in got] == [CLAUDE_B]
+    assert got[0]["roster_fills"] == 0
+
+
 def test_an_old_listing_is_not_news(tmp_path):
     conn = db.connect(tmp_path / "listings.db")
     now = db.now()
