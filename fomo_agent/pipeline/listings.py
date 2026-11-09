@@ -34,7 +34,7 @@ from ..config import settings
 log = logging.getLogger(__name__)
 
 # Real fills only: a dust row or a seeded distribution is not somebody entering the name.
-ROSTER_FILLS = ("SELECT COUNT(*) FROM trades tr WHERE tr.mint = t.mint "
+ROSTER_FILLS = ("SELECT 1 FROM trades tr WHERE tr.mint = t.mint "
                 "AND COALESCE(tr.kind, 'trade') = 'trade'")
 
 
@@ -62,21 +62,21 @@ def candidates(conn: sqlite3.Connection, chain: str | None = None, now: int | No
         "SELECT t.mint mint, t.chain chain, COALESCE(t.symbol, substr(t.mint, 1, 8)) sym, "
         "  t.liquidity_usd liq, t.volume_usd vol24, t.mcap_usd mcap, "
         "  COALESCE(t.created_at, t.first_seen_at) t0, t.sellable sellable, "
-        f"  ({ROSTER_FILLS}) roster_fills "
+        "  0 roster_fills "
         "FROM tokens t "
         "WHERE t.liquidity_usd >= ? AND t.volume_usd IS NOT NULL AND t.volume_usd > 0 "
         "  AND t.volume_usd >= ? * t.liquidity_usd "
         "  AND COALESCE(t.created_at, t.first_seen_at) >= ? "
         # a token nobody can sell is not a lead, however deep its pool looks (trap pools)
         "  AND COALESCE(t.sellable, 1) != 0 "
+        # Apply cohort exclusion before LIMIT so occupied tokens cannot hide new leads.
+        f"  AND NOT EXISTS ({ROSTER_FILLS}) "
         + ("  AND t.chain = ? " if chain else "")
         + "ORDER BY (t.volume_usd / t.liquidity_usd) DESC, t.volume_usd DESC LIMIT ?",
         [min_liq, ratio, since, *([chain] if chain else []), limit],
     ).fetchall()
     out = []
     for r in rows:
-        if r["roster_fills"]:
-            continue          # the cohort owns this one now; the burst rule reports it
         out.append({
             "mint": r["mint"], "chain": r["chain"], "sym": r["sym"],
             "liq": r["liq"], "vol24": r["vol24"], "mcap": r["mcap"],
