@@ -47,13 +47,21 @@ def _setup(verbose: bool) -> None:
 def _run(kind: str, fn, *args, **kw) -> dict | None:
     """Wrap a step in a `runs` row. Errors are recorded, not raised."""
     conn = db.connect()
-    rid = db.run_start(conn, kind)
+    rid = None
     try:
+        from .pipeline.collect_api import FOMO_RUN_KINDS
+        if kind in FOMO_RUN_KINDS:
+            from .credit_guard import reserve
+            # Bootstrap before our own unfinished paid run can count as uncertain history.
+            reserve(0)
+        rid = db.run_start(conn, kind)
         stats = fn(conn, *args, **kw)
         db.run_finish(conn, rid, stats)
         return stats
     except Exception as e:  # noqa: BLE001
         logging.getLogger(kind).error("%s failed: %s", kind, e)
+        if rid is None:
+            rid = db.run_start(conn, kind)
         db.run_finish(conn, rid, error=repr(e)[:500])
         return None
     finally:
