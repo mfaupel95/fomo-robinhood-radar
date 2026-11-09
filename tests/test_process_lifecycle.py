@@ -45,21 +45,22 @@ def test_cleanup_failure_does_not_permanently_block_or_refund(tmp_path, monkeypa
         c.close()
 
 
-def test_suspended_assignment_failure_never_resumes_and_reaps():
+def test_atomic_owned_startup_resume_failure_reaps():
     from fomo_agent.process_lifecycle import WindowsTree, ProcessCleanupError
     events = []
     class Native:
         def create_job(self): events.append('job'); return 10
-        def spawn_suspended(self, args, env): events.append('suspended'); return 20, 30, 40
-        def assign(self, job, process): events.append('assign'); raise OSError('fixture assignment refused')
-        def resume(self, thread): events.append('resume')
+        def spawn_suspended(self, args, env, job):
+            assert job == 10
+            events.append('atomic_owned'); return 20, 30, 40
+        def resume(self, thread): events.append('resume_refused'); raise OSError('fixture resume refused')
         def terminate_process(self, process): events.append('terminate_owned_handle')
         def wait_process(self, process, timeout): events.append('reaped'); return 124
         def close(self, handle): events.append(('close', handle))
     with pytest.raises(ProcessCleanupError):
         WindowsTree(['fixture'], {}, native=Native())
     assert 'resume' not in events
-    assert events.index('assign') < events.index('terminate_owned_handle') < events.index('reaped')
+    assert events.index('atomic_owned') < events.index('resume_refused') < events.index('terminate_owned_handle') < events.index('reaped')
     assert {e[1] for e in events if isinstance(e, tuple)} == {10, 20, 30}
 
 
@@ -68,8 +69,9 @@ def test_tree_survivor_is_reported_not_success():
     events = []
     class Native:
         def create_job(self): return 10
-        def spawn_suspended(self, args, env): return 20, 30, 40
-        def assign(self, job, process): events.append('assign')
+        def spawn_suspended(self, args, env, job):
+            assert job == 10
+            events.append('atomic_owned'); return 20, 30, 40
         def resume(self, thread): events.append('resume')
         def terminate_job(self, job): events.append('terminate_job')
         def wait_empty(self, job, timeout): raise ProcessCleanupError('fixture child survives')
@@ -77,7 +79,7 @@ def test_tree_survivor_is_reported_not_success():
     tree = WindowsTree(['fixture'], {}, native=Native())
     with pytest.raises(ProcessCleanupError):
         tree.close()
-    assert events[:2] == ['assign', 'resume']
+    assert events[:2] == ['atomic_owned', 'resume']
     assert ('close', 10) in events and ('close', 20) in events
 
 

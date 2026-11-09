@@ -1,18 +1,27 @@
-"""Windows owned process trees: suspend -> assign private job -> resume.
+"""Windows owned process trees: atomic job membership at creation -> resume.
 
 No PID enumeration/kill and no taskkill helper. Descendants inherit membership;
 no breakaway flag is permitted. The non-inheritable job handle is kill-on-close,
-including when the supervisor crashes. Failure to assign is fail-closed while
-only the retained, never-resumed process handle can be terminated.
+including when the supervisor crashes. Unsupported job-list attributes fail
+before CreateProcessW; there is no separate create/assign window.
 """
 from __future__ import annotations
 import os
 import subprocess
 import time
 
+# Strong ownership survives a caller discarding an exception after classification.
+# Only successful closes remove entries; this is not a PID cleanup service.
+_pending_owners = []
+
 
 class ProcessCleanupError(RuntimeError):
     """The owned process tree could not be safely started or reaped (transient)."""
+
+    def __init__(self, message, *, owner=None, errors=()):
+        super().__init__(message)
+        self.owner = owner  # Preserve failed-close ownership, including startup.
+        self.errors = tuple(errors)
 
 
 class WindowsTree:
@@ -22,46 +31,62 @@ class WindowsTree:
         self.pid = None
         try:
             self.job = self.native.create_job()
-            self.process, self.thread, self.pid = self.native.spawn_suspended(args, env)
-            self.native.assign(self.job, self.process)
+            self.process, self.thread, self.pid = self.native.spawn_suspended(args, env, self.job)
             self.native.resume(self.thread)
             self.native.close(self.thread)
             self.thread = None
         except BaseException as exc:
+            errors = [exc]
             try:
                 if self.process is not None:
                     self.native.terminate_process(self.process)
                     self.native.wait_process(self.process, 3)
             except Exception as cleanup_exc:
-                raise ProcessCleanupError('Windows suspended process cleanup not confirmed') from cleanup_exc
-            finally:
-                for name in ('thread', 'process', 'job'):
-                    handle = getattr(self, name)
-                    if handle is not None:
-                        self.native.close(handle)
-                        setattr(self, name, None)
-            raise ProcessCleanupError('Windows tree startup failed closed') from exc
+                errors.append(cleanup_exc)
+            self._close_handles(errors)
+            self._remember_ownership()
+            raise ProcessCleanupError('Windows tree startup failed; cleanup errors retained', owner=self, errors=errors) from exc
+
+    def _remember_ownership(self):
+        pending = any(getattr(self, name) is not None for name in ('thread', 'process', 'job'))
+        pending = pending or bool(getattr(self.native, 'reap', ())) or bool(getattr(self.native, 'pending_handles', ()))
+        if pending and self not in _pending_owners:
+            _pending_owners.append(self)
+        elif not pending and self in _pending_owners:
+            _pending_owners.remove(self)
+
+    def _close_handles(self, errors):
+        close_pending = getattr(self.native, 'close_pending', None)
+        if close_pending is not None:
+            try:
+                close_pending()
+            except Exception as exc:
+                errors.append(exc)
+        for name in ('thread', 'process', 'job'):
+            handle = getattr(self, name)
+            if handle is not None:
+                try:
+                    self.native.close(handle)
+                except Exception as exc:
+                    errors.append(exc)
+                else:
+                    setattr(self, name, None)
 
     def wait(self, timeout):
         return self.native.wait_process(self.process, timeout)
 
     def close(self):
-        if self.job is None:
-            return
-        try:
-            # Also reap descendants after a normal launcher exit.
-            self.native.terminate_job(self.job)
-            self.native.wait_empty(self.job, 3)
-        except Exception as exc:
-            raise ProcessCleanupError('Windows job cleanup not confirmed') from exc
-        finally:
-            # Closing the last job handle is an independent kernel kill fallback.
-            # Do not turn an unconfirmed cleanup into a successful return.
-            for name in ('thread', 'process', 'job'):
-                handle = getattr(self, name)
-                if handle is not None:
-                    self.native.close(handle)
-                    setattr(self, name, None)
+        errors = []
+        if self.job is not None:
+            try:
+                self.native.terminate_job(self.job)
+                self.native.wait_empty(self.job, 3)
+            except Exception as exc:
+                errors.append(exc)
+        self._close_handles(errors)
+        self._remember_ownership()
+        if errors:
+            raise ProcessCleanupError('Windows job cleanup not confirmed', owner=self, errors=errors) from errors[0]
 
 
 def windows_bounded(args, env, timeout):
@@ -82,12 +107,13 @@ class _Native:
         import _winapi
         self.ct, self.wt, self.api = ct, wt, _winapi
         self.reap = []
+        self.pending_handles = []
         self.k = ct.WinDLL('kernel32', use_last_error=True)
         signatures = {
             'CreateJobObjectW': ([ct.c_void_p, wt.LPCWSTR], wt.HANDLE),
             'SetInformationJobObject': ([wt.HANDLE, ct.c_int, ct.c_void_p, wt.DWORD], wt.BOOL),
             'QueryInformationJobObject': ([wt.HANDLE, ct.c_int, ct.c_void_p, wt.DWORD, ct.c_void_p], wt.BOOL),
-            'AssignProcessToJobObject': ([wt.HANDLE, wt.HANDLE], wt.BOOL),
+
             'TerminateJobObject': ([wt.HANDLE, wt.UINT], wt.BOOL),
             'ResumeThread': ([wt.HANDLE], wt.DWORD),
             'OpenProcess': ([wt.DWORD, wt.BOOL, wt.DWORD], wt.HANDLE),
@@ -121,26 +147,77 @@ class _Native:
             self.check(self.k.SetInformationJobObject(job, 9, ct.byref(limits), ct.sizeof(limits)))
             return job
         except BaseException:
-            self.close(job)
+            try:
+                self.close(job)
+            except Exception as exc:
+                self.pending_handles.append(job)
+                raise ProcessCleanupError('job setup and job close failed', owner=self, errors=[exc]) from exc
             raise
 
-    def spawn_suspended(self, args, env):
+    def spawn_suspended(self, args, env, job):
+        ct, wt = self.ct, self.wt
+        class Startup(ct.Structure):
+            _fields_ = [('cb', wt.DWORD), ('reserved', wt.LPWSTR),
+                        ('desktop', wt.LPWSTR), ('title', wt.LPWSTR)] + [
+                (n, wt.DWORD) for n in ('x','y','xs','ys','xc','yc','fill','flags')] + [
+                ('show', wt.WORD), ('reserved_size', wt.WORD),
+                ('reserved_ptr', ct.c_void_p), ('stdin', wt.HANDLE),
+                ('stdout', wt.HANDLE), ('stderr', wt.HANDLE)]
+        class StartupEx(ct.Structure):
+            _fields_ = [('startup', Startup), ('attributes', ct.c_void_p)]
+        class ProcessInfo(ct.Structure):
+            _fields_ = [('process', wt.HANDLE), ('thread', wt.HANDLE),
+                        ('pid', wt.DWORD), ('tid', wt.DWORD)]
+        initialize = self.k.InitializeProcThreadAttributeList
+        initialize.argtypes = [ct.c_void_p, wt.DWORD, wt.DWORD, ct.POINTER(ct.c_size_t)]
+        initialize.restype = wt.BOOL
+        update = self.k.UpdateProcThreadAttribute
+        update.argtypes = [ct.c_void_p, wt.DWORD, ct.c_size_t, ct.c_void_p,
+                           ct.c_size_t, ct.c_void_p, ct.c_void_p]
+        update.restype = wt.BOOL
+        delete = self.k.DeleteProcThreadAttributeList
+        delete.argtypes = [ct.c_void_p]; delete.restype = None
+        create = self.k.CreateProcessW
+        create.argtypes = [wt.LPCWSTR, wt.LPWSTR, ct.c_void_p, ct.c_void_p,
+                           wt.BOOL, wt.DWORD, ct.c_void_p, wt.LPCWSTR,
+                           ct.POINTER(StartupEx), ct.POINTER(ProcessInfo)]
+        create.restype = wt.BOOL
+        size = ct.c_size_t()
+        initialize(None, 2, 0, ct.byref(size))
+        attributes = ct.create_string_buffer(size.value)
+        self.check(initialize(attributes, 2, 0, ct.byref(size)))
+        try:
+            jobs = (wt.HANDLE * 1)(job)
+            # Windows 10+ JOB_LIST: refusal is detected BEFORE any child starts.
+            self.check(update(attributes, 0, 0x0002000D, jobs, ct.sizeof(jobs), None, None))
+            keepalive = []
+            return self._create_with_attributes(args, env, attributes, StartupEx, ProcessInfo, create, update, keepalive)
+        finally:
+            delete(attributes)
+
+    def _create_with_attributes(self, args, env, attributes, StartupEx, ProcessInfo, create, update, keepalive):
         import msvcrt
+        ct, wt = self.ct, self.wt
         # Explicit handle allowlist: child gets only NUL, never the job handle.
         with open(os.devnull, 'r+b', buffering=0) as null:
             handle = msvcrt.get_osfhandle(null.fileno())
             os.set_handle_inheritable(handle, True)
-            startup = subprocess.STARTUPINFO()
-            startup.dwFlags = subprocess.STARTF_USESTDHANDLES
-            startup.hStdInput = startup.hStdOutput = startup.hStdError = handle
-            startup.lpAttributeList = {'handle_list': [handle]}
-            hp, ht, pid, tid = self.api.CreateProcess(
-                None, subprocess.list2cmdline(args), None, None, True,
-                0x00000004 | subprocess.CREATE_NO_WINDOW, env, None, startup)
-        return hp, ht, pid
+            handles = (wt.HANDLE * 1)(handle)
+            keepalive.append(handles)  # Attribute values outlive DeleteAttributeList.
+            self.check(update(attributes, 0, 0x00020002, handles, ct.sizeof(handles), None, None))
+            startup = StartupEx()
+            startup.startup.cb = ct.sizeof(startup)
+            startup.startup.flags = subprocess.STARTF_USESTDHANDLES
+            startup.startup.stdin = startup.startup.stdout = startup.startup.stderr = handle
+            startup.attributes = ct.cast(attributes, ct.c_void_p)
+            info = ProcessInfo()
+            command = ct.create_unicode_buffer(subprocess.list2cmdline(args))
+            block = ct.create_unicode_buffer('\0'.join(k+'='+v for k,v in sorted(env.items(), key=lambda x: x[0].upper()))+'\0\0')
+            self.check(create(None, command, None, None, True,
+                              0x00000004 | 0x00080000 | 0x00000400 | subprocess.CREATE_NO_WINDOW,
+                              block, None, ct.byref(startup), ct.byref(info)))
+        return info.process, info.thread, info.pid
 
-    def assign(self, job, process):
-        self.check(self.k.AssignProcessToJobObject(job, process))
 
     def resume(self, thread):
         if self.k.ResumeThread(thread) == 0xffffffff:
@@ -163,11 +240,38 @@ class _Native:
             self.check(self.k.TerminateJobObject(job, 124))
             # Include children created between the first snapshot and termination.
             self.retain_members(job)
-        except BaseException:
-            for handle in self.reap:
-                self.close(handle)
-            self.reap.clear()
+        except BaseException as exc:
+            try:
+                self.close_observers()
+            except ProcessCleanupError as cleanup:
+                raise ProcessCleanupError('job termination and observer close failed', owner=self,
+                                          errors=[exc, *cleanup.errors]) from exc
             raise
+
+    def close_observers(self):
+        self._close_list(self.reap)
+
+    def close_pending(self):
+        errors = []
+        for handles in (self.reap, self.pending_handles):
+            try:
+                self._close_list(handles)
+            except ProcessCleanupError as exc:
+                errors.extend(exc.errors)
+        if errors:
+            raise ProcessCleanupError('native handle close failed', owner=self, errors=errors) from errors[0]
+
+    def _close_list(self, handles):
+        errors = []
+        for handle in tuple(handles):
+            try:
+                self.close(handle)
+            except Exception as exc:
+                errors.append(exc)
+            else:
+                handles.remove(handle)
+        if errors:
+            raise ProcessCleanupError('observer handle close failed', owner=self, errors=errors) from errors[0]
 
     def retain_members(self, job):
         ct, wt = self.ct, self.wt
@@ -198,7 +302,11 @@ class _Native:
                     handle = None
             finally:
                 if handle is not None:
-                    self.close(handle)
+                    try:
+                        self.close(handle)
+                    except Exception as exc:
+                        self.pending_handles.append(handle)
+                        raise ProcessCleanupError('unretained observer close failed', owner=self, errors=[exc]) from exc
 
     def active(self, job):
         ct, wt = self.ct, self.wt
@@ -211,6 +319,7 @@ class _Native:
 
     def wait_empty(self, job, timeout):
         deadline = time.monotonic() + timeout
+        errors = []
         try:
             while self.active(job):
                 if time.monotonic() >= deadline:
@@ -219,10 +328,14 @@ class _Native:
             # Accounting can reach zero before process teardown signals handles.
             for handle in self.reap:
                 self.wait_process(handle, max(0, deadline - time.monotonic()))
-        finally:
-            for handle in self.reap:
-                self.close(handle)
-            self.reap.clear()
+        except Exception as exc:
+            errors.append(exc)
+        try:
+            self.close_observers()
+        except ProcessCleanupError as exc:
+            errors.extend(exc.errors)
+        if errors:
+            raise ProcessCleanupError('job wait/observer cleanup not confirmed', owner=self, errors=errors) from errors[0]
 
     def close(self, handle):
         self.api.CloseHandle(handle)
