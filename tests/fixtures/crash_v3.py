@@ -19,7 +19,9 @@ class Gate(_Native):
             times = [wt.FILETIME() for _ in range(4)]
             assert k.GetProcessTimes(p, *(ct.byref(x) for x in times))
             record['created'] = times[0].dwLowDateTime | times[0].dwHighDateTime << 32
-        (root/'ready.json').write_text(json.dumps(record))
+        pending = root/'ready.pending'
+        pending.write_text(json.dumps(record))
+        pending.replace(root/'ready.json')  # Readiness must publish a complete record.
         time.sleep(45)
     def create_job(self):
         self.job = super().create_job(); return self.job
