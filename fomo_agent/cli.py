@@ -934,6 +934,13 @@ def run(once: bool = typer.Option(False, "--once", help="single pass of every st
         # tokens table), and every pass is what would have caught PONS and the two Claude mints
         ("listings", settings.new_tokens_interval,
          lambda c: __import__("fomo_agent.pipeline.listings", fromlist=["sweep"]).sweep(c)),
+        # Preserve the operational split; the durable collector remains the scheduled owner.
+        ("fomoapi_24h", 2 * 3600,
+         lambda c: __import__("fomo_agent.pipeline.collect_api", fromlist=["collect"]).collect(c, ("24h",), None) if settings.fomoapi_key else {"skipped": "FOMOAPI_KEY not set"}),
+        ("fomoapi_7d", 6 * 3600,
+         lambda c: __import__("fomo_agent.pipeline.collect_api", fromlist=["collect"]).collect(c, ("7d",), None) if settings.fomoapi_key else {"skipped": "FOMOAPI_KEY not set"}),
+        ("fomoapi_theses", 8 * 3600,
+         lambda c: __import__("fomo_agent.pipeline.collect_api", fromlist=["collect"]).collect(c, (), 1) if settings.fomoapi_key else {"skipped": "FOMOAPI_KEY not set"}),
         # free on Robinhood Chain, and it is what turns collected fomo users into trackable wallets
         ("resolve", settings.discover_interval, lambda c: rs.resolve_pending(c)),
         ("track", settings.track_interval, lambda c: tr.track_all(c)),

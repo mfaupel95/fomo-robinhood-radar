@@ -30,6 +30,7 @@ log = logging.getLogger(__name__)
 # judge it (see score.add_idle). It must stay in every pass so the moment it makes a first
 # trade it re-enters the scoring queue as `tracking` (track_all flips it).
 TRACKED = ("candidate", "tracking", "active", "watch", "idle")
+TRACKED_SCAN = TRACKED + ("dropped",)
 
 
 class Tracker(Protocol):
@@ -118,11 +119,24 @@ def track_wallet(conn: sqlite3.Connection, tracker: Tracker, address: str, chain
     return inserted
 
 
+def promote_idle(conn: sqlite3.Connection) -> int:
+    """Promote from stored fills, regardless of which writer inserted them."""
+    rows = conn.execute(
+        "SELECT DISTINCT tr.address FROM traders tr JOIN trades t ON t.address = tr.address "
+        "WHERE tr.status = 'idle'"
+    ).fetchall()
+    if rows:
+        with db.tx(conn):
+            for row in rows:
+                db.set_status(conn, row[0], "tracking")
+    return len(rows)
+
+
 def track_all(conn: sqlite3.Connection, trackers: list[Tracker] | None = None, limit: int | None = None) -> dict:
     trackers = trackers or build_trackers()
-    rows = db.traders_by_status(conn, *TRACKED)
+    rows = db.traders_by_status(conn, *TRACKED_SCAN)
     # least-recently-tracked first, so a large candidate pool rotates fairly under the request budget
-    rows.sort(key=lambda r: r["last_tracked_ts"] or 0)
+    rows.sort(key=lambda r: (r["status"] == "dropped", r["last_tracked_ts"] or 0))
     rows = rows[: (limit or settings.track_max_wallets_per_pass)]
     # batch sources index a whole roster in one shot; tell them which wallets this pass needs
     for t in trackers:
@@ -186,6 +200,7 @@ def track_all(conn: sqlite3.Connection, trackers: list[Tracker] | None = None, l
     # size every new flow fill against its wallet's own median, then move the medians on
     from .provenance import classify, refresh_medians
 
+    stats["promoted_idle"] = promote_idle(conn)
     stats["kinds"] = classify(conn, since=0)   # every flow fill still unsized, however old
     refresh_medians(conn)
     log.info("track: %s", stats)
