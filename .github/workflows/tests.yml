@@ -19,4 +19,4 @@ jobs:
           cache: pip
       - run: pip install -e ".[dev]"
       # the suite is offline by design: every source is exercised through a stored fixture
-      - run: pytest -q
+      - run: python -m pytest -q
