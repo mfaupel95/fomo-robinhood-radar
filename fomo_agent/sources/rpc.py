@@ -630,7 +630,8 @@ class RobinhoodRPC:
     def _load(self) -> None:
         if not self._wallets:
             raise RpcError("RobinhoodRPC.prime() must be called with the wallets to index")
-        if time.monotonic() - self._fetched_at < settings.rpc_min_interval_s:
+        # Zero marks an invalidated cache, not a scan at machine boot.
+        if self._fetched_at > 0 and time.monotonic() - self._fetched_at < settings.rpc_min_interval_s:
             if self._failed is not None:
                 # the scan for this pass already failed: every wallet asked after it gets the
                 # same answer without another two requests each
