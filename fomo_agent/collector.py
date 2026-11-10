@@ -11,6 +11,7 @@ import time
 from . import db
 from .config import settings
 from .credit_guard import BudgetBlocked, reserve
+from .process_lifecycle import ProcessCleanupError, windows_bounded
 from .sources.fomoapi import AuthenticationError, OutOfCredits
 
 class SingleInstance:
@@ -73,7 +74,7 @@ def failure_state(c, kind, reason, now):
 def classify(e):
     import httpx
     from .ratelimit import SharedLimitUnavailable
-    if isinstance(e, SharedLimitUnavailable): return 'transient'
+    if isinstance(e, (SharedLimitUnavailable, ProcessCleanupError, subprocess.TimeoutExpired)): return 'transient'
     if isinstance(e, AuthenticationError): return 'auth'
     if isinstance(e, (BudgetBlocked, OutOfCredits)): return 'budget'
     if isinstance(e, (httpx.TimeoutException, httpx.TransportError)): return 'transient'
@@ -114,11 +115,12 @@ def bounded(args, timeout):
     env = dict(os.environ)
     env.pop('PYTHONHOME', None)
     env['PYTHONPATH'] = str(Path(__file__).resolve().parents[1])
+    if os.name == 'nt':
+        return windows_bounded(args, env, timeout)
     p = subprocess.Popen(args, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try: return p.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
-        if os.name == 'nt': subprocess.run(['taskkill', '/PID', str(p.pid), '/T', '/F'], capture_output=True, timeout=15)
-        else: p.kill()
+        p.kill()
         p.wait(timeout=15)
         return 124
 

@@ -102,6 +102,7 @@ def test_parallel_process_start_is_excluded(store):
         assert r.returncode==0
     with co.SingleInstance(p): pass
 
+@pytest.mark.skipif(os.name != 'nt', reason='Windows native process/handle API required')
 def test_real_hanger_is_killed_bounded():
     before=time.monotonic()
     assert co.bounded([sys.executable,'-c','import time; time.sleep(60)'],0.3)==124
