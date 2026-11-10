@@ -13,6 +13,16 @@ from fomo_agent import collector as co, db, credit_guard as cg
 from fomo_agent.config import settings
 
 
+def test_native_close_handle_false_is_reported():
+    from types import SimpleNamespace
+    from fomo_agent.process_lifecycle import _Native
+    native = _Native()
+    native.ct.get_last_error = lambda: 6
+    native.k = SimpleNamespace(CloseHandle=lambda handle: False)
+    with pytest.raises(OSError):
+        native.close(10)
+
+
 def test_taskkill_timeout_is_transient():
     assert co.classify(subprocess.TimeoutExpired(['taskkill', '/T'], 15)) == 'transient'
 

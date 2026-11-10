@@ -110,6 +110,7 @@ class _Native:
         self.pending_handles = []
         self.k = ct.WinDLL('kernel32', use_last_error=True)
         signatures = {
+            'CloseHandle': ([wt.HANDLE], wt.BOOL),
             'CreateJobObjectW': ([ct.c_void_p, wt.LPCWSTR], wt.HANDLE),
             'SetInformationJobObject': ([wt.HANDLE, ct.c_int, ct.c_void_p, wt.DWORD], wt.BOOL),
             'QueryInformationJobObject': ([wt.HANDLE, ct.c_int, ct.c_void_p, wt.DWORD, ct.c_void_p], wt.BOOL),
@@ -338,4 +339,4 @@ class _Native:
             raise ProcessCleanupError('job wait/observer cleanup not confirmed', owner=self, errors=errors) from errors[0]
 
     def close(self, handle):
-        self.api.CloseHandle(handle)
+        self.check(self.k.CloseHandle(handle))
