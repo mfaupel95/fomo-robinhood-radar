@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 WSOL_MINT = "So11111111111111111111111111111111111111112"
 STABLE_MINTS = {
@@ -117,3 +117,15 @@ class ScoreResult(BaseModel):
     red_flags: list[Literal["bot", "bundler", "insider-like", "wash", "one-hit", "distributing"]] = []
     summary: str
     confidence: float = Field(ge=0, le=1)
+
+    @field_validator("style", "red_flags", mode="before")
+    @classmethod
+    def _drop_unknown_tags(cls, value, info):
+        # Advisory tags must not discard a valid verdict; verdict fields stay strict.
+        allowed = ({"sniper", "swing", "scalper", "holder", "copy-follower"}
+                   if info.field_name == "style" else
+                   {"bot", "bundler", "insider-like", "wash", "one-hit", "distributing"})
+        if not isinstance(value, list):
+            return value
+        return [tag.strip().lower() for tag in value
+                if isinstance(tag, str) and tag.strip().lower() in allowed]

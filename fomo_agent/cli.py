@@ -47,13 +47,21 @@ def _setup(verbose: bool) -> None:
 def _run(kind: str, fn, *args, **kw) -> dict | None:
     """Wrap a step in a `runs` row. Errors are recorded, not raised."""
     conn = db.connect()
-    rid = db.run_start(conn, kind)
+    rid = None
     try:
+        from .pipeline.collect_api import FOMO_RUN_KINDS
+        if kind in FOMO_RUN_KINDS:
+            from .credit_guard import reserve
+            # Bootstrap before our own unfinished paid run can count as uncertain history.
+            reserve(0)
+        rid = db.run_start(conn, kind)
         stats = fn(conn, *args, **kw)
         db.run_finish(conn, rid, stats)
         return stats
     except Exception as e:  # noqa: BLE001
         logging.getLogger(kind).error("%s failed: %s", kind, e)
+        if rid is None:
+            rid = db.run_start(conn, kind)
         db.run_finish(conn, rid, error=repr(e)[:500])
         return None
     finally:
@@ -934,6 +942,13 @@ def run(once: bool = typer.Option(False, "--once", help="single pass of every st
         # tokens table), and every pass is what would have caught PONS and the two Claude mints
         ("listings", settings.new_tokens_interval,
          lambda c: __import__("fomo_agent.pipeline.listings", fromlist=["sweep"]).sweep(c)),
+        # Preserve the operational split; the durable collector remains the scheduled owner.
+        ("fomoapi_24h", 2 * 3600,
+         lambda c: __import__("fomo_agent.pipeline.collect_api", fromlist=["collect"]).collect(c, ("24h",), None) if settings.fomoapi_key else {"skipped": "FOMOAPI_KEY not set"}),
+        ("fomoapi_7d", 6 * 3600,
+         lambda c: __import__("fomo_agent.pipeline.collect_api", fromlist=["collect"]).collect(c, ("7d",), None) if settings.fomoapi_key else {"skipped": "FOMOAPI_KEY not set"}),
+        ("fomoapi_theses", 8 * 3600,
+         lambda c: __import__("fomo_agent.pipeline.collect_api", fromlist=["collect"]).collect(c, (), 1) if settings.fomoapi_key else {"skipped": "FOMOAPI_KEY not set"}),
         # free on Robinhood Chain, and it is what turns collected fomo users into trackable wallets
         ("resolve", settings.discover_interval, lambda c: rs.resolve_pending(c)),
         ("track", settings.track_interval, lambda c: tr.track_all(c)),
