@@ -13,11 +13,12 @@ from fomo_agent import collector as co, db, credit_guard as cg
 from fomo_agent.config import settings
 
 
+@pytest.mark.skipif(os.name != 'nt', reason='Windows native process/handle API required')
 def test_native_close_handle_false_is_reported():
     from types import SimpleNamespace
     from fomo_agent.process_lifecycle import _Native
-    native = _Native()
-    native.ct.get_last_error = lambda: 6
+    native = _Native.__new__(_Native)
+    native.ct = SimpleNamespace(get_last_error=lambda: 6, WinError=lambda code: OSError(code))
     native.k = SimpleNamespace(CloseHandle=lambda handle: False)
     with pytest.raises(OSError):
         native.close(10)
@@ -94,6 +95,7 @@ def test_tree_survivor_is_reported_not_success():
 
 
 @pytest.mark.parametrize('root_exit', ['no', 'yes', 'cleanup_fault'])
+@pytest.mark.skipif(os.name != 'nt', reason='Windows native process/handle API required')
 def test_native_launcher_child_grandchild_handles_and_lock(tmp_path, root_exit):
     from fomo_agent.process_lifecycle import WindowsTree
     k = ctypes.WinDLL('kernel32', use_last_error=True)

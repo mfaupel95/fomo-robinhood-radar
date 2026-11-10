@@ -85,6 +85,7 @@ def test_close_fault_is_transient_attempts_all_and_retains_ownership(failed):
     assert tree not in _pending_owners
 
 
+@pytest.mark.skipif(os.name != 'nt', reason='Windows native process/handle API required')
 def test_job_attribute_unsupported_fails_before_create(tmp_path):
     native = _Native()
     attempted = []
@@ -123,6 +124,7 @@ def test_startup_multiple_close_faults_keep_every_handle():
     tree.close()
 
 
+@pytest.mark.skipif(os.name != 'nt', reason='Windows native process/handle API required')
 def test_observer_close_fault_retains_only_failed_handle_and_tries_rest():
     native = _Native()
     native.reap = [101, 102, 103]
@@ -142,6 +144,7 @@ def test_observer_close_fault_retains_only_failed_handle_and_tries_rest():
 
 
 @pytest.mark.parametrize('mode', ['before_create', 'after_create'])
+@pytest.mark.skipif(os.name != 'nt', reason='Windows native process/handle API required')
 def test_native_supervisor_crash_at_creation(tmp_path, mode):
     native = _Native()
     native.k.GetProcessTimes.argtypes = [wt.HANDLE] + [ct.POINTER(wt.FILETIME)]*4
